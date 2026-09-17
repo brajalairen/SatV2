@@ -1,0 +1,12 @@
+# Isolated environment for run_feasibility.py only. Install torch FIRST (see README.md).
+# Pins chosen to match the Round 1 deployment target (HF ZeroGPU: Python 3.12, torch >= 2.8)
+# while respecting Falcon's remote code (needs transformers < 4.50; Falcon itself was built on 4.41.2).
+transformers==4.49.0
+timm==1.0.15
+einops==0.8.1
+huggingface_hub>=0.26,<1.0
+safetensors>=0.4.3
+pillow>=10.3
+numpy>=1.26
+psutil>=6.0
+nvidia-ml-py>=12.535

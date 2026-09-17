@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#2563eb"/>
+  <!-- A framed footprint over a globe line: an area of interest on the earth. -->
+  <path d="M4 16h24M16 4.5c3.4 3.2 3.4 19.8 0 23M16 4.5c-3.4 3.2-3.4 19.8 0 23" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.6"/>
+  <circle cx="16" cy="16" r="11.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.6"/>
+  <rect x="10.5" y="10.5" width="11" height="11" rx="1.5" fill="#fff" fill-opacity=".18" stroke="#fff" stroke-width="2"/>
+</svg>

@@ -1,0 +1,62 @@
+[
+  {
+    "label": "VQA: is there water? (Sentinel-2, Finnish coast)",
+    "images": [
+      {"path": "bigearthnet_coast_finland/s2_bgrn.tif", "modality": "optical", "acquired": "2017-06-13"}
+    ],
+    "query": "Is there a water body in this image?"
+  },
+  {
+    "label": "Caption: river and farmland (Sentinel-2, Austria)",
+    "images": [
+      {"path": "bigearthnet_river_austria/s2_bgrn.tif", "modality": "optical", "acquired": "2017-06-13"}
+    ],
+    "query": "Describe the land-cover and major objects visible in this image."
+  },
+  {
+    "label": "Grounding: highlight the water body (Sentinel-2, Finnish coast)",
+    "images": [
+      {"path": "bigearthnet_coast_finland/s2_bgrn.tif", "modality": "optical", "acquired": "2017-06-13"}
+    ],
+    "query": "Highlight the water body in this image."
+  },
+  {
+    "label": "Change: Navi Mumbai airport site, 2018 vs 2025 (Sentinel-2)",
+    "images": [
+      {"path": "navi_mumbai_change/before.tif", "modality": "optical", "acquired": "2018-01-03"},
+      {"path": "navi_mumbai_change/after.tif", "modality": "optical", "acquired": "2025-01-06"}
+    ],
+    "query": "What changed between these two dates, and where did the change occur?"
+  },
+  {
+    "label": "Change VQA: built-up area, Navi Mumbai",
+    "images": [
+      {"path": "navi_mumbai_change/before.tif", "modality": "optical", "acquired": "2018-01-03"},
+      {"path": "navi_mumbai_change/after.tif", "modality": "optical", "acquired": "2025-01-06"}
+    ],
+    "query": "Has the built-up area increased, decreased, or remained unchanged?"
+  },
+  {
+    "label": "Optical + SAR: water and built-up (BigEarthNet pair, Finnish coast)",
+    "images": [
+      {"path": "bigearthnet_coast_finland/s2_bgrn.tif", "modality": "optical", "acquired": "2017-06-13"},
+      {"path": "bigearthnet_coast_finland/s1_vv_vh.tif", "modality": "sar", "acquired": "2017-06-13"}
+    ],
+    "query": "Use the optical and SAR images together to identify built-up and water-covered regions."
+  },
+  {
+    "label": "SAR only: water extent from Sentinel-1 (Finnish coast)",
+    "images": [
+      {"path": "bigearthnet_coast_finland/s1_vv_vh.tif", "modality": "sar", "acquired": "2017-06-13"}
+    ],
+    "query": "Where is water visible in this SAR image?"
+  },
+  {
+    "label": "Rejected input: mismatched grids (validation safety check)",
+    "images": [
+      {"path": "navi_mumbai_change/before.tif", "modality": "optical", "acquired": "2018-01-03"},
+      {"path": "bigearthnet_coast_finland/s2_bgrn.tif", "modality": "optical", "acquired": "2017-06-13"}
+    ],
+    "query": "What changed between these two images?"
+  }
+]

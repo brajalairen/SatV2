@@ -1,0 +1,15 @@
+# Runtime requirements for the Hugging Face ZeroGPU Space (Linux, Python 3.12). Resolved together on 2026-09-17.
+# Gradio itself is provided by the Space SDK (sdk_version 5.50.0 in the Space README written by scripts/deploy_space.py).
+# Local development uses pyproject.toml extras instead: pip install -e ".[ui,models,dev]"
+torch==2.8.0
+transformers==4.49.0  # Falcon remote code needs < 4.50 (docs/decisions.md D-021)
+tokenizers==0.21.4
+timm==1.0.15
+einops==0.8.1
+huggingface_hub==0.36.2  # transformers 4.49 requires < 1.0
+numpy==2.5.3
+pillow==11.3.0
+pydantic==2.12.3
+rasterio==1.5.1
+scipy==1.18.1
+spaces==0.51.3

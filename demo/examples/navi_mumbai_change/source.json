@@ -1,0 +1,24 @@
+{
+  "before": {
+    "id": "S2B_43QBB_20180103_3_L2A",
+    "datetime": "2018-01-03T05:53:37Z",
+    "cloud_cover": 0.001125
+  },
+  "after": {
+    "id": "S2B_43QBB_20250106_0_L2A",
+    "datetime": "2025-01-06T05:53:41.120000Z",
+    "cloud_cover": 0.00063
+  },
+  "bbox": [
+    73.045,
+    18.975,
+    73.095,
+    19.02
+  ],
+  "crs": "EPSG:32643",
+  "size": [
+    532,
+    504
+  ],
+  "attribution": "Contains modified Copernicus Sentinel data"
+}

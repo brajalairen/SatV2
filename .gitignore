@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Large or generated artifacts: never commit (see CLAUDE.md §11)
+data/
+models/
+runs/
+build/
+.gradio/
+uploads/
+web/node_modules/
+web/dist/
+*.ipynb_checkpoints
+
+# Secrets
+.env

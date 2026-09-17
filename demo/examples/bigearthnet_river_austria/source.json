@@ -1,0 +1,17 @@
+{
+  "dataset": "BigEarthNet v2.0 (reBEN), S1 + S2 patch pair",
+  "patch_id": "S2A_MSIL2A_20170613T101031_N9999_R022_T33UUP_61_39",
+  "s1_name": "S1A_IW_GRDH_1SDV_20170613T165043_33UUP_61_39",
+  "pairing_source": "s1_name column of BigEarthNet.txt.parquet (authoritative mapping)",
+  "country": "Austria",
+  "acquired": "2017-06-13",
+  "crs": "EPSG:32633",
+  "size": [120, 120],
+  "resolution_m": 10,
+  "same_grid": true,
+  "s2_bands": ["B02", "B03", "B04", "B08"],
+  "s1_bands": ["VV", "VH"],
+  "text_json": "matching BigEarthNet.txt question/answer rows for this patch",
+  "licence": "BigEarthNet v2.0 and BigEarthNet.txt: CDLA-Permissive-1.0",
+  "attribution": "Contains modified Copernicus Sentinel data"
+}

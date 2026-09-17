@@ -1,0 +1,126 @@
+/* Tailwind v4 emits its utilities inside @layer utilities, and unlayered CSS always outranks
+   layered CSS whatever the import order. So MapLibre's own `.maplibregl-map { position: relative }`
+   beats any positioning utility we put on the map container: the container is given an explicit
+   size in MapView instead of relying on `absolute inset-0`. */
+@import "maplibre-gl/dist/maplibre-gl.css";
+@import "tailwindcss";
+
+/* Design tokens. The map is the page; every other surface floats above it, so surfaces are
+   near-opaque with one shared elevation treatment and restrained borders. */
+:root {
+  --surface: 255 255 255;
+  --surface-sunken: 248 249 251;
+  --surface-hover: 243 244 247;
+  --border: 226 228 233;
+  --border-strong: 205 208 215;
+  --text: 24 26 31;
+  --text-muted: 104 110 122;
+  --text-faint: 148 154 165;
+  --accent: 37 99 235;
+  --accent-soft: 219 234 254;
+  --accent-text: 255 255 255;
+  --danger: 200 45 55;
+  --warn: 176 110 8;
+  --ok: 22 130 85;
+
+  --shadow-sm: 0 1px 2px rgb(16 20 30 / 0.06), 0 1px 3px rgb(16 20 30 / 0.08);
+  --shadow-md: 0 4px 12px rgb(16 20 30 / 0.08), 0 1px 3px rgb(16 20 30 / 0.06);
+  --shadow-lg: 0 12px 32px rgb(16 20 30 / 0.12), 0 2px 8px rgb(16 20 30 / 0.08);
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --rail: 56px;
+  --panel: 320px;
+}
+
+:root[data-theme="dark"] {
+  --surface: 24 26 31;
+  --surface-sunken: 30 33 39;
+  --surface-hover: 38 42 50;
+  --border: 48 52 61;
+  --border-strong: 66 71 82;
+  --text: 237 239 243;
+  --text-muted: 154 161 173;
+  --text-faint: 112 119 131;
+  --accent: 96 145 255;
+  --accent-soft: 30 48 84;
+  --accent-text: 12 14 18;
+  --danger: 248 113 113;
+  --warn: 245 185 66;
+  --ok: 74 200 145;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px rgb(0 0 0 / 0.25);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.45), 0 2px 8px rgb(0 0 0 / 0.35);
+}
+
+@theme inline {
+  --color-surface: rgb(var(--surface));
+  --color-sunken: rgb(var(--surface-sunken));
+  --color-hover: rgb(var(--surface-hover));
+  --color-line: rgb(var(--border));
+  --color-line-strong: rgb(var(--border-strong));
+  --color-ink: rgb(var(--text));
+  --color-muted: rgb(var(--text-muted));
+  --color-faint: rgb(var(--text-faint));
+  --color-accent: rgb(var(--accent));
+  --color-accent-soft: rgb(var(--accent-soft));
+  --color-accent-ink: rgb(var(--accent-text));
+  --color-danger: rgb(var(--danger));
+  --color-warn: rgb(var(--warn));
+  --color-ok: rgb(var(--ok));
+  --radius-card: var(--radius);
+  --shadow-float: var(--shadow-md);
+  --shadow-raised: var(--shadow-lg);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: rgb(var(--surface-sunken));
+  color: rgb(var(--text));
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* One focus treatment everywhere, visible on both themes and over the map. */
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* The app supplies its own compass and zoom controls, so MapLibre's are hidden rather than
+   duplicated, and its attribution is restyled to sit quietly in the corner. */
+.maplibregl-ctrl-top-right,
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl-group {
+  display: none;
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgb(var(--surface) / 0.75) !important;
+  color: rgb(var(--text-muted)) !important;
+  font-size: 10px !important;
+  border-radius: 6px 0 0 0 !important;
+  backdrop-filter: blur(6px);
+}
+
+.maplibregl-ctrl-attrib a {
+  color: rgb(var(--text-muted)) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
