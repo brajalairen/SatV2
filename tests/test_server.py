@@ -197,4 +197,209 @@ def test_area_is_ignored_for_imagery_without_a_crs(client, write_tiff, scene):
                                              "aoi_bbox": [74.9, 25.2, 75.1, 25.4]}).json()
 
     assert body["area"]["applied"] is False
+    assert "no coordinate reference system" in body["area"]["reason"], "the real reason, not 'does not overlap'"
     assert body["response"]["status"] in {"ok", "partial"}, "the analysis still runs on the whole image"
+
+
+# --------------------------------------------------------------------------- drawn shapes
+
+
+def _circle(bounds, scale=0.4, segments=64):
+    """A circle-like polygon centred in `bounds`, as the map sends a drawn circle."""
+    import math
+    west, south, east, north = bounds
+    cx, cy = (west + east) / 2, (south + north) / 2
+    rx, ry = (east - west) * scale, (north - south) * scale
+    ring = [[cx + rx * math.cos(2 * math.pi * k / segments), cy + ry * math.sin(2 * math.pi * k / segments)]
+            for k in range(segments)]
+    return {"type": "Polygon", "coordinates": [ring + [ring[0]]]}
+
+
+def _box(west, south, east, north):
+    return {"type": "Polygon", "coordinates": [[[west, south], [east, south], [east, north], [west, north], [west, south]]]}
+
+
+@pytest.fixture
+def water_scene():
+    """Water everywhere (green well above NIR, so NDWI > 0 on every pixel)."""
+    rng = np.random.default_rng(3)
+    bands = np.stack([np.full((96, 96), v, np.float32) for v in (600, 900, 400, 150)])
+    return (bands + rng.normal(0, 5, bands.shape)).astype(np.float32)
+
+
+def test_a_drawn_circle_is_analysed_as_a_circle_not_its_box(client, write_tiff, water_scene):
+    """Coverage must count only pixels inside the circle: water everywhere means 100%, not the ~79%
+    a bounding box with masked-out corners would report."""
+    upload = _upload(client, write_tiff("water.tif", water_scene, band_names=["blue", "green", "red", "nir"]))
+    body = client.post("/api/analyze", json={"query": "Describe this image.",
+                                             "images": [{"upload_id": upload["id"]}],
+                                             "aoi_geometry": _circle(_bounds(upload))}).json()
+
+    assert body["area"]["applied"] is True and body["area"]["masked"] is True
+    indices = next(s for s in body["response"]["trace"]["steps"] if s["tool"] == "optical.spectral_indices")
+    assert indices["outputs"]["water_fraction"] == 1.0
+    assert "water-like pixels (NDWI > 0): 100.0%" in body["response"]["answer"]
+
+
+def test_a_drawn_rectangle_sent_as_geometry_matches_the_box_path(client, write_tiff, area_scene):
+    upload = _upload(client, write_tiff("utm.tif", area_scene, band_names=["blue", "green", "red", "nir"]))
+    box = _inset(_bounds(upload))
+    request = {"query": "Describe this image.", "images": [{"upload_id": upload["id"]}]}
+    as_box = client.post("/api/analyze", json=request | {"aoi_bbox": box}).json()
+    as_shape = client.post("/api/analyze", json=request | {"aoi_geometry": _box(*box)}).json()
+
+    assert as_shape["area"]["applied"] is True and as_shape["area"]["masked"] is False
+    assert as_shape["area"] == as_box["area"]
+    outputs = lambda body: [s["outputs"] for s in body["response"]["trace"]["steps"]]
+    assert outputs(as_shape) == outputs(as_box), "a rectangle keeps the original box crop"
+
+
+def test_an_unusable_shape_is_refused(client, write_tiff, scene):
+    upload = _upload(client, write_tiff("utm.tif", scene, band_names=["blue", "green", "red", "nir"]))
+    request = {"query": "Describe this image.", "images": [{"upload_id": upload["id"]}]}
+    point = client.post("/api/analyze", json=request | {"aoi_geometry": {"type": "Point", "coordinates": [75.0, 25.3]}})
+    open_ring = client.post("/api/analyze", json=request | {"aoi_geometry": {"type": "Polygon",
+                                                                             "coordinates": [[[75, 25], [75.1, 25]]]}})
+    assert point.status_code == 422 and open_ring.status_code == 422
+    assert "4 positions" in open_ring.text
+
+
+def test_a_circle_over_a_pair_masks_both_images_identically(client, write_tiff, area_scene):
+    before = _upload(client, write_tiff("before.tif", area_scene, band_names=["blue", "green", "red", "nir"]))
+    after = _upload(client, write_tiff("after.tif", area_scene, band_names=["blue", "green", "red", "nir"]))
+    body = client.post("/api/analyze", json={
+        "query": "What changed between these two dates?",
+        "images": [{"upload_id": before["id"], "acquired": "2019-01-01"},
+                   {"upload_id": after["id"], "acquired": "2023-01-01"}],
+        "aoi_geometry": _circle(_bounds(before))}).json()
+
+    assert body["area"]["applied"] is True and body["area"]["masked"] is True
+    assert len({(i["width"], i["height"]) for i in body["response"]["trace"]["images"]}) == 1
+    assert body["response"]["status"] == "ok"
+
+
+def test_a_pinned_overlay_is_transparent_outside_the_circle(client, write_tiff, water_scene):
+    import io
+    from PIL import Image
+
+    upload = _upload(client, write_tiff("water.tif", water_scene, band_names=["blue", "green", "red", "nir"]))
+    body = client.post("/api/analyze", json={"query": "Describe this image.",
+                                             "images": [{"upload_id": upload["id"]}],
+                                             "aoi_geometry": _circle(_bounds(upload))}).json()
+    overlay = Image.open(io.BytesIO(client.get(body["overlay_layers"][0]["url"]).content))
+
+    assert overlay.mode == "RGBA"
+    width, height = overlay.size
+    assert overlay.getpixel((0, 0))[3] == 0, "a corner outside the circle is see-through on the map"
+    assert overlay.getpixel((width // 2, height // 2))[3] == 255
+
+
+# --------------------------------------------------------------------------- names and identity
+
+
+def _upload_as(client, path, filename):
+    with open(path, "rb") as handle:
+        response = client.post("/api/uploads", files={"file": (filename, handle, "image/tiff")},
+                               data={"modality": "optical"})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_the_trace_shows_the_users_file_name_not_a_storage_id(client, write_tiff, area_scene):
+    """The execution trace is what SIH evaluates: it must name the file the user gave it."""
+    upload = _upload_as(client, write_tiff("x.tif", area_scene, band_names=["blue", "green", "red", "nir"]),
+                        "my scene.tif")
+    request = {"query": "Describe this image.", "images": [{"upload_id": upload["id"]}]}
+    whole = client.post("/api/analyze", json=request).json()
+    cropped = client.post("/api/analyze", json=request | {"aoi_bbox": _inset(_bounds(upload))}).json()
+
+    assert upload["name"] == "my scene.tif"
+    assert whole["response"]["trace"]["images"][0]["name"] == "my scene.tif"
+    assert cropped["response"]["trace"]["images"][0]["name"] == "my scene-area.tif"
+
+
+def test_unsafe_file_names_are_neutralised():
+    from satquery.server import _stored_name
+
+    assert _stored_name("../../evil:name?.tif", ".tif") == "evil_name_.tif"
+    assert _stored_name("CON.tif", ".tif") == "_CON.tif", "a reserved device name on Windows"
+    assert _stored_name("...", ".tif") == "upload.tif"
+    assert _stored_name(None, ".png") == "upload.png"
+    assert _stored_name("dune à Pondichéry.tif", ".tif") == "dune à Pondichéry.tif"
+
+
+def test_an_upload_named_like_a_path_stays_inside_the_uploads_folder(client, write_tiff, scene, tmp_path):
+    upload = _upload_as(client, write_tiff("x.tif", scene, band_names=["blue", "green", "red", "nir"]), "../../escape.tif")
+    body = client.post("/api/analyze", json={"query": "Describe this image.",
+                                             "images": [{"upload_id": upload["id"]}]}).json()
+
+    assert body["response"]["trace"]["images"][0]["name"] == "escape.tif"
+    assert not (tmp_path / "escape.tif").exists() and not (tmp_path.parent / "escape.tif").exists()
+
+
+def test_a_result_lists_the_uploads_it_ran_on(client, write_tiff, area_scene):
+    bands = ["blue", "green", "red", "nir"]
+    first = _upload_as(client, write_tiff("a.tif", area_scene, band_names=bands), "same.tif")
+    second = _upload_as(client, write_tiff("b.tif", area_scene, band_names=bands), "same.tif")
+    body = client.post("/api/analyze", json={
+        "query": "What changed between these two dates?",
+        "images": [{"upload_id": first["id"], "acquired": "2019-01-01"},
+                   {"upload_id": second["id"], "acquired": "2023-01-01"}]}).json()
+
+    assert body["upload_ids"] == [first["id"], second["id"]], "identity survives two files with one name"
+
+
+def test_a_point_is_reported_as_having_no_area(client, write_tiff, scene):
+    upload = _upload(client, write_tiff("utm.tif", scene, band_names=["blue", "green", "red", "nir"]))
+    west, south, east, north = _bounds(upload)
+    lon, lat = (west + east) / 2, (south + north) / 2
+    body = client.post("/api/analyze", json={"query": "Describe this image.",
+                                             "images": [{"upload_id": upload["id"]}],
+                                             "aoi_bbox": [lon, lat, lon, lat]}).json()
+
+    assert body["area"]["applied"] is False
+    assert "single point has no area" in body["area"]["reason"], "a point on the image does overlap it"
+    assert body["response"]["status"] in {"ok", "partial"}
+
+
+def test_an_area_too_small_to_analyse_says_so(client, write_tiff, scene):
+    upload = _upload(client, write_tiff("utm.tif", scene, band_names=["blue", "green", "red", "nir"]))
+    west, south, east, north = _bounds(upload)
+    tiny = [west, south, west + (east - west) * 0.05, south + (north - south) * 0.05]
+    body = client.post("/api/analyze", json={"query": "Describe this image.",
+                                             "images": [{"upload_id": upload["id"]}], "aoi_bbox": tiny}).json()
+
+    assert body["area"]["applied"] is False and "smaller than 16x16 pixels" in body["area"]["reason"]
+
+
+# --------------------------------------------------------------------------- upload size
+
+
+@pytest.fixture
+def small_limit_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("SATQUERY_VLM_BACKEND", "fake")
+    monkeypatch.setenv("SATQUERY_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SATQUERY_MAX_UPLOAD_MB", "1")
+    return TestClient(create_app())
+
+
+def test_an_oversized_upload_is_refused_from_its_declared_length(small_limit_client):
+    response = small_limit_client.post("/api/uploads", files={"file": ("big.tif", b"\0" * (2 * 1024 * 1024), "image/tiff")})
+    assert response.status_code == 413 and "upload limit" in response.json()["detail"]
+
+
+def test_an_upload_without_a_declared_length_is_capped_while_streaming(small_limit_client, tmp_path):
+    boundary = "satquery-test"
+    head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.tif\"\r\n"
+            "Content-Type: image/tiff\r\n\r\n").encode()
+
+    def chunked_body():  # a generator body is sent chunked, with no Content-Length
+        yield head
+        for _ in range(3):
+            yield b"\0" * (1024 * 1024)
+        yield f"\r\n--{boundary}--\r\n".encode()
+
+    response = small_limit_client.post("/api/uploads", content=chunked_body(),
+                                       headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    assert response.status_code == 413
+    assert not any((tmp_path / "uploads").rglob("big.tif")), "the partial file is removed"

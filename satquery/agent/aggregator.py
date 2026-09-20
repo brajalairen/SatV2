@@ -49,10 +49,12 @@ def aggregate(intent: Intent, ctx: ToolContext, results: list[StepResult], run_d
 
 
 def _overlay_evidence(array, run_dir: Path, name: str, label: str, step_id: str,
-                      image_index: int | None = None) -> Evidence:
+                      image_index: int | None = None, ctx: ToolContext | None = None) -> Evidence:
     """`image_index` is the input image this overlay shares a pixel grid with, so a map can pin it
-    to that raster's footprint. It stays None for side-by-side composites, which match no grid."""
-    return Evidence(kind="overlay", label=label, file=ev.save_png(array, run_dir / f"{name}.png"),
+    to that raster's footprint. It stays None for side-by-side composites, which match no grid.
+    Pinned overlays are transparent wherever that image has no data (e.g. outside a drawn circle)."""
+    alpha = ctx.valid(image_index) if ctx is not None and image_index is not None else None
+    return Evidence(kind="overlay", label=label, file=ev.save_png(array, run_dir / f"{name}.png", alpha),
                     image_index=image_index, source_step=step_id)
 
 
@@ -72,7 +74,7 @@ def _caption(intent, r, ctx, run_dir):
                    f"water-like pixels (NDWI > 0): {_pct(indices.outputs['water_fraction'])}.")
     if ctx.images[0].modality == "sar":
         answer += _sar_context(r)
-    return answer, caption.confidence, [_overlay_evidence(ctx.rgb(0), run_dir, "input", "input image (as analysed)", caption.step_id, 0)]
+    return answer, caption.confidence, [_overlay_evidence(ctx.rgb(0), run_dir, "input", "input image (as analysed)", caption.step_id, 0, ctx)]
 
 
 def _vqa(intent, r, ctx, run_dir):
@@ -80,7 +82,7 @@ def _vqa(intent, r, ctx, run_dir):
     if not vqa:
         return "", None, []
     answer = vqa.outputs["text"] + (_sar_context(r) if ctx.images[0].modality == "sar" else "")
-    return answer, vqa.confidence, [_overlay_evidence(ctx.rgb(0), run_dir, "input", "input image (as analysed)", vqa.step_id, 0)]
+    return answer, vqa.confidence, [_overlay_evidence(ctx.rgb(0), run_dir, "input", "input image (as analysed)", vqa.step_id, 0, ctx)]
 
 
 def _grounding(intent, r, ctx, run_dir):
@@ -93,7 +95,7 @@ def _grounding(intent, r, ctx, run_dir):
                       if fraction > 0 else f"No {target} was found in this image.")
             array = ev.overlay(ctx.rgb(0), masks=[(r.mask(step), color)])
             confidence = step.confidence or Confidence(value=None, method="not estimated for this tool")
-            return answer, confidence, [_overlay_evidence(array, run_dir, "grounding", f"{target} (highlighted)", step.step_id, 0)]
+            return answer, confidence, [_overlay_evidence(array, run_dir, "grounding", f"{target} (highlighted)", step.step_id, 0, ctx)]
     for tool in ("vlm.detect", "vlm.ground"):
         step = r.get(tool)
         if step:
@@ -102,7 +104,7 @@ def _grounding(intent, r, ctx, run_dir):
             answer = (f"Found {len(boxes)} {target} region(s), located in the {_places(regions)}." if boxes
                       else f"No {target} was located.")
             array = ev.overlay(ctx.rgb(0), boxes=[(b, "red") for b in boxes])
-            return answer, step.confidence, [_overlay_evidence(array, run_dir, "grounding", f"{target} (boxes)", step.step_id, 0)]
+            return answer, step.confidence, [_overlay_evidence(array, run_dir, "grounding", f"{target} (boxes)", step.step_id, 0, ctx)]
     return "", None, []
 
 

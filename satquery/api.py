@@ -1,5 +1,6 @@
 """The single entry point shared by the UI, CLI and tests (D-005): analyze(request) -> response."""
 
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,24 +15,28 @@ from satquery import geo
 from satquery.imaging import load_image
 from satquery.schemas import AnalysisRequest, AnalysisResponse, ExecutionTrace, Intent, ValidationIssue
 from satquery.settings import Settings, load_settings
-from satquery.specialists.tools import ToolContext
+from satquery.specialists.tools import MAX_PROMPT_CHARS, ToolContext
 from satquery.specialists.vlm import FakeVLM, VLMBackend
 from satquery.validation import check_images, check_request, detect_input_config, issue
 
 _VLM_CACHE: dict[tuple, VLMBackend] = {}
+# The HTTP server runs analyses on a thread pool: without this, two simultaneous first requests
+# could each create a backend and load the weights twice.
+_VLM_CACHE_LOCK = threading.Lock()
 
 
 def get_vlm(settings: Settings) -> VLMBackend:
     key = (settings.vlm_backend, settings.falcon_model_id, settings.device, settings.num_beams, settings.max_new_tokens)
-    if key not in _VLM_CACHE:
-        if settings.vlm_backend == "fake":
-            _VLM_CACHE[key] = FakeVLM()
-        elif settings.vlm_backend == "falcon":
-            from satquery.specialists.falcon import FalconVLM
-            _VLM_CACHE[key] = FalconVLM(settings.falcon_model_id, settings.device, settings.num_beams, settings.max_new_tokens)
-        else:
-            raise ValueError(f"unknown SATQUERY_VLM_BACKEND '{settings.vlm_backend}' (use 'falcon' or 'fake')")
-    return _VLM_CACHE[key]
+    with _VLM_CACHE_LOCK:
+        if key not in _VLM_CACHE:
+            if settings.vlm_backend == "fake":
+                _VLM_CACHE[key] = FakeVLM()
+            elif settings.vlm_backend == "falcon":
+                from satquery.specialists.falcon import FalconVLM
+                _VLM_CACHE[key] = FalconVLM(settings.falcon_model_id, settings.device, settings.num_beams, settings.max_new_tokens)
+            else:
+                raise ValueError(f"unknown SATQUERY_VLM_BACKEND '{settings.vlm_backend}' (use 'falcon' or 'fake')")
+        return _VLM_CACHE[key]
 
 
 def preload(settings: Settings | None = None) -> VLMBackend:
@@ -60,7 +65,6 @@ def analyze(request: AnalysisRequest, settings: Settings | None = None, vlm: VLM
         response = AnalysisResponse(status=status, task=task, answer=answer, evidence=list(evidence),
                                     confidence=confidence, trace=trace)
         response.report_html, response.report_json = write_reports(response, run_dir)
-        Path(response.report_json).write_text(response.model_dump_json(indent=2), encoding="utf-8")
         return response
 
     def reject() -> AnalysisResponse:
@@ -96,6 +100,12 @@ def analyze(request: AnalysisRequest, settings: Settings | None = None, vlm: VLM
         return reject()
 
     trace.plan = build_plan(intent, config, images, request.query)
+    # Some plans hand the question to the VLM verbatim; its permitted length would otherwise fail
+    # that step mid-run with a generic error. Captions never pass it on, so they are not limited.
+    if any(len(str(step.params.get(key, ""))) > MAX_PROMPT_CHARS for step in trace.plan for key in ("question", "description")):
+        trace.validation.append(issue("query_too_long", f"The question is {len(request.query)} characters; the model "
+                                      f"accepts at most {MAX_PROMPT_CHARS}. Please shorten it."))
+        return reject()
     ctx = ToolContext(images=images, vlm=vlm or get_vlm(settings))
     trace.steps = execute(trace.plan, ctx)
     status, answer, evidence, confidence = aggregate(intent, ctx, trace.steps, run_dir)

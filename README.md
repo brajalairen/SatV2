@@ -41,6 +41,9 @@ $env:SATQUERY_VLM_BACKEND="fake"; .venv\Scripts\python -m uvicorn satquery.serve
 Open http://127.0.0.1:8000. FastAPI serves both the API and the built client on one port.
 Open **Help** in the sidebar and pick a demo scenario for a complete run in two clicks.
 
+Frontend tests (Vitest, no browser or server needed): `cd web; npm test`. They cover the drawing geometry and the
+store: what a drawn area sends, which result a removed layer invalidates, and what cancelling does.
+
 For frontend development, run Vite beside the API and use http://localhost:5173 (it proxies `/api`):
 ```powershell
 .venv\Scripts\python -m uvicorn satquery.server:app --reload   # terminal 1
@@ -72,10 +75,12 @@ A GeoTIFF that carries a CRS is placed on the basemap from its own affine transf
 pinned to the same footprint. Plain TIFF without a CRS, and PNG/JPEG, cannot be placed, so they open in an
 off-map viewer with the identical question and result flow.
 
-Drawing an area **narrows the analysis to the part of your images inside it**: the source raster is cut to that
-box at full resolution, keeping its CRS, and the agent runs on the crop. If the area misses your imagery, covers
-all of it, or leaves less than 16x16 px, the run falls back to the whole image and the result card says which and
-why. A selected area is never silently ignored.
+Drawing an area **narrows the analysis to the part of your images inside it**. Rectangles and circles are drawn
+like a selection in any drawing program (press, drag, release); polygons by clicking their corners. The source
+raster is cut to the shape's box at full resolution, keeping its CRS, and the agent runs on the crop. For a circle
+or polygon the pixels outside the shape become nodata, so every mask and percentage covers the shape itself, not
+its box. If the area misses your imagery, covers all of it, or leaves less than 16x16 px, the run falls back to
+the whole image and the result card says which and why. A selected area is never silently ignored.
 
 There is **no imagery catalogue and no live retrieval**, so an area drawn over empty map has nothing to analyse. The source, resolution and cloud-cover controls are therefore shipped visibly disabled and
 labelled "not connected in this build". Acquisition date and optical/SAR *are* real: they set `ImageInput.acquired`
@@ -90,6 +95,7 @@ camera only.
 | `SATQUERY_NUM_BEAMS` | `3` | beam search width (1 is faster) |
 | `SATQUERY_RUNS_DIR` | `runs` | where per-request reports and overlays are written |
 | `SATQUERY_MAX_PIXELS` | `4194304` | larger rasters are read decimated |
+| `SATQUERY_MAX_UPLOAD_MB` | `2048` | web uploads larger than this are refused (HTTP 413) |
 
 ## Other tasks
 - **Model feasibility on a laptop GPU:** `experiments/model_feasibility/`

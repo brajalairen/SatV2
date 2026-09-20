@@ -11,6 +11,39 @@ In ~2 days we submit the **first-round** entry: a PPT, a demo video, and a **wor
 - **Rule:** a convincing, working end-to-end demo beats polish. Build the smallest version of the approved architecture that supports the demo and can be extended later.
 - **Tie-break:** when polishing an existing part competes with building a missing part the demo needs, build the missing part.
 
+## D-026 · The bi-temporal change map compares both dates on one shared scale (2026-09-20, user decision, FINAL for R1)
+- **Was:** each date was stretched by its own 2–98 percentiles per band, then differenced
+  (`raster_analysis.change_map`). Two dates were therefore measured against two different references.
+- **Why that is wrong:** unchanged ground maps to different values whenever the other date's distribution moves, so a
+  large real change invents change everywhere else; and a change that shifts the whole scene cancels out entirely.
+  Measured on synthetic pairs: the old method found 17% of a quadrant that had genuinely changed, and 5% of a
+  scene-wide change.
+- **Now:** one percentile range per band, computed from both dates pooled, applied to both. Unchanged ground maps to
+  the same value on both dates. SAR was already correct (dB minus dB) and is unchanged.
+- **Effect on the demo:** only the bi-temporal scenarios move. Navi Mumbai 2018→2025: the deterministic map goes from
+  27.6% to **25.7%** of the scene, and Otsu separability improves from 0.674 to 0.728. No other scenario's numbers change.
+- **Still open [POST-SEL]:** the VLM's own change input is still two separately stretched RGB renders
+  (`imaging.render_rgb` is per image), so the model can see the same class of artifact. Fixing that means making the
+  render pair-aware, which must not apply to optical–SAR pairs, where a shared scale would be wrong.
+
+## D-024 · Round 1 is demoed and submitted on the map-first web app (2026-09-20, user decision, FINAL for R1)
+- **What.** The PPT, the demo video and the submitted link all use the map-first client (`web/`, served by
+  `satquery/server.py`). The Gradio UI stays in the repository as a fallback only, and is not what we show.
+- **Why it is compliant.** The problem statement asks for "an interactive GUI or web application with an agentic
+  remote-sensing AI backend" and names no technology. Both front ends call the same `analyze()`; the map client is the
+  primary interface under D-023 and shows the georeferenced evidence and the execution trace that SIH evaluates.
+- **How the link is served.** `uvicorn satquery.server:app --port 8000` on the GPU laptop plus a tunnel
+  (`cloudflared tunnel --url http://localhost:8000`). Hosting on a free HF Space remains blocked (D-020), and a tunnel
+  needs the laptop online either way. Checklist and fallback: `docs/round1-submission-kit.md` §3.
+- **Supersedes** the "use the Gradio share link" resolution recorded in D-020.
+
+## D-025 · The point tool is removed from area selection (2026-09-20, user decision, FINAL for R1)
+- A point encloses no area, so the analysis pipeline can only fall back to the whole image. Offering it implied a
+  capability that does not exist (D-023 "no fake capability"), so rectangle, circle and polygon remain.
+- The server still reports "a single point has no area to analyse" if a point geometry arrives, because areas saved in a
+  browser before this change may still contain one.
+- **[POST-SEL]** If a point should ever mean "analyse around here", it needs a stated radius and its own decision.
+
 ## D-018 · GeoChat Colab notebook is out of scope (2026-09-17, team, FINAL)
 - **Do not** modify, restructure, commit, or depend on the "GeoChat Collab" notebook. **Do not** ask the team to commit it.
 - If an idea from it matters, document the idea; leave the notebook untouched.

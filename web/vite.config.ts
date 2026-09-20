@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -10,4 +11,6 @@ export default defineConfig({
     proxy: { "/api": { target: "http://127.0.0.1:8000", changeOrigin: true } },
   },
   build: { outDir: "dist", sourcemap: true },
+  // `npm test`: unit tests for the drawing geometry and the store, in a DOM without a real map.
+  test: { environment: "jsdom", include: ["src/**/*.test.ts"] },
 });

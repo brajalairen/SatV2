@@ -82,8 +82,9 @@ function AreaLine() {
 
   return area.applied ? (
     <p className="mt-2 text-[11px] leading-relaxed text-muted">
-      Restricted to your selected area: {area.width}x{area.height} px of {area.source_width}x
-      {area.source_height}.
+      {area.masked
+        ? `Restricted to the shape you drew: pixels outside it are excluded from every figure (its box is ${area.width}x${area.height} px of ${area.source_width}x${area.source_height}).`
+        : `Restricted to your selected area: ${area.width}x${area.height} px of ${area.source_width}x${area.source_height}.`}
     </p>
   ) : (
     <p className="mt-2 text-[11px] leading-relaxed text-warn">

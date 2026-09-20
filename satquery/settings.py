@@ -14,6 +14,7 @@ class Settings:
     max_new_tokens: int = 1024
     max_pixels: int = 2048 * 2048  # larger rasters are read decimated
     runs_dir: Path = Path("runs")
+    max_upload_mb: int = 2048  # web uploads above this are refused (the server may be publicly tunnelled)
 
 
 def load_settings() -> Settings:
@@ -27,4 +28,5 @@ def load_settings() -> Settings:
         max_new_tokens=int(env("SATQUERY_MAX_NEW_TOKENS", defaults.max_new_tokens)),
         max_pixels=int(env("SATQUERY_MAX_PIXELS", defaults.max_pixels)),
         runs_dir=Path(env("SATQUERY_RUNS_DIR", str(defaults.runs_dir))),
+        max_upload_mb=int(env("SATQUERY_MAX_UPLOAD_MB", defaults.max_upload_mb)),
     )

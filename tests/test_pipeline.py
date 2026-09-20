@@ -116,3 +116,138 @@ def test_unpermitted_parameter_is_rejected(write_tiff, sar_scene):
     results = execute(plan, ctx)
     assert [r.status for r in results] == ["failed", "failed"]
     assert "threshold_db" in results[0].error and "registry" in results[1].error
+
+
+# --------------------------------------------------------------------------- nodata (e.g. outside a drawn circle)
+
+
+def _masked_optical(optical_scene):
+    """The optical scene cropped to a drawn circle: corners outside it are NaN in every band."""
+    from satquery.imaging import RasterImage
+    yy, xx = np.mgrid[:64, :64]
+    inside = (xx - 31.5) ** 2 + (yy - 31.5) ** 2 <= 29 ** 2
+    data = optical_scene.copy()
+    data[:, ~inside] = np.nan
+    return RasterImage(data=data, band_names=["blue", "green", "red", "nir"], modality="optical", name="circle"), inside
+
+
+def test_vlm_masks_never_claim_nodata(optical_scene):
+    """The VLM sees the corners outside a circle as black, which a model may call water."""
+    image, inside = _masked_optical(optical_scene)
+    ctx = ToolContext(images=[image], vlm=FakeVLM())
+    plan = [PlanStep(step_id="s1", tool="vlm.segment", image_indices=[0], params={"target": "water"}, purpose="test")]
+    (result,) = execute(plan, ctx)
+
+    mask = ctx.artifacts["s1"].masks["mask"]
+    assert result.status == "ok" and not mask[~inside].any()
+    assert result.outputs["fraction"] == pytest.approx(mask.sum() / inside.sum(), abs=1e-4)
+
+
+def test_boxes_centred_on_nodata_are_dropped(optical_scene):
+    from satquery.specialists.vlm import VLMResult
+
+    class TwoBoxes(FakeVLM):
+        def detect(self, rgb, target):
+            return VLMResult(text="2 ships", boxes=[(28.0, 28.0, 36.0, 36.0), (0.0, 0.0, 4.0, 4.0)])
+
+    image, _ = _masked_optical(optical_scene)
+    ctx = ToolContext(images=[image], vlm=TwoBoxes())
+    plan = [PlanStep(step_id="s1", tool="vlm.detect", image_indices=[0], params={"target": "ship"}, purpose="test")]
+    (result,) = execute(plan, ctx)
+
+    assert result.outputs["count"] == 1 and result.outputs["dropped_outside_area"] == 1
+    assert [e.bbox for e in result.evidence] == [(28.0, 28.0, 36.0, 36.0)]
+
+
+# --------------------------------------------------------------------------- concurrent requests (HTTP thread pool)
+
+
+def _in_threads(target, count=4):
+    import threading
+    threads = [threading.Thread(target=target) for _ in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+
+def test_backend_is_created_once_under_concurrent_first_requests(monkeypatch):
+    """Two first requests at once must not load the weights twice."""
+    import time
+    import satquery.api as api
+
+    created = []
+
+    class SlowFake(FakeVLM):
+        def __init__(self):
+            created.append(self)
+            time.sleep(0.05)  # widen the window in which a second request could slip in
+
+    monkeypatch.setattr(api, "FakeVLM", SlowFake)
+    monkeypatch.setattr(api, "_VLM_CACHE", {})
+    backends = []
+    _in_threads(lambda: backends.append(api.get_vlm(Settings(vlm_backend="fake"))))
+
+    assert len(created) == 1 and all(backend is backends[0] for backend in backends)
+
+
+def test_falcon_generations_run_one_at_a_time(monkeypatch):
+    """One model on one GPU: concurrent requests queue for it instead of generating in parallel."""
+    import threading
+    import time
+    from satquery.specialists.falcon import FalconVLM
+
+    vlm = FalconVLM("not-loaded")
+    active, peak, guard = 0, 0, threading.Lock()
+
+    def fake_generate(prompt, rgb):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        with guard:
+            active -= 1
+        return "</s>water</s>", 0.5
+
+    monkeypatch.setattr(vlm, "_generate_unlocked", fake_generate)
+    rgb = np.zeros((8, 8, 3), np.uint8)
+    _in_threads(lambda: vlm.caption(rgb))
+
+    assert peak == 1
+
+
+def test_the_json_report_names_files_within_its_run_folder(settings, write_tiff, optical_scene, tmp_path):
+    """A downloaded report must not carry this machine's paths: they break elsewhere and disclose the layout."""
+    import json
+
+    path = write_tiff("s2.tif", optical_scene, band_names=["B02", "B03", "B04", "B08"])
+    response = run(settings, "Highlight the water body.", (path, "optical", None))
+    text = Path(response.report_json).read_text(encoding="utf-8")
+    report = json.loads(text)
+    run_dir = Path(response.report_json).parent
+
+    assert tmp_path.name not in text, "no absolute path from this machine"
+    assert report["report_html"] == "report.html" and report["report_json"] == "report.json"
+    files = [e["file"] for e in report["evidence"] if e["file"]]
+    assert files and all((run_dir / name).is_file() for name in files)
+    assert Path(response.report_html).is_absolute(), "the in-memory response keeps real paths for the CLI and UI"
+
+
+def test_a_question_too_long_for_the_model_is_rejected_up_front(settings, write_tiff, optical_scene):
+    path = write_tiff("s2.tif", optical_scene, band_names=["B02", "B03", "B04", "B08"])
+    question = "Is there a water body in this image? " + "Please look carefully at every part. " * 10
+
+    response = run(settings, question, (path, "optical", None))
+
+    assert response.status == "invalid_input" and response.trace.steps == []
+    assert any(i.code == "query_too_long" for i in response.trace.validation)
+    assert "at most 300" in response.answer
+
+
+def test_a_long_caption_request_is_not_limited(settings, write_tiff, optical_scene):
+    """Captioning never passes the question to the model, so its length does not matter."""
+    path = write_tiff("s2.tif", optical_scene, band_names=["B02", "B03", "B04", "B08"])
+    response = run(settings, "Describe the land-cover of this image. " + "Include every detail you can. " * 12,
+                   (path, "optical", None))
+    assert response.status == "ok" and response.task == "caption"

@@ -68,3 +68,14 @@ def test_input_configuration():
     assert detect_input_config(["sar"]) == "single_sar"
     assert detect_input_config(["optical", "optical"]) == "pair_bitemporal"
     assert detect_input_config(["optical", "sar"]) == "pair_cross_modal"
+
+
+def test_linear_sar_with_a_few_negative_noise_samples_is_still_linear(write_tiff, sar_scene):
+    """Noise subtraction can leave slightly negative intensities; that does not make the image dB."""
+    linear = np.power(10, sar_scene / 10).astype(np.float32)
+    linear[0, :2, :] = -0.001  # a couple of rows of negative noise floor
+    image = load_image(write_tiff("sar_noisy.tif", linear), "sar")
+
+    co_db, _, units = sar_db(image)
+    assert "linear" in units
+    assert np.allclose(co_db[2:], sar_scene[0, 2:], atol=1e-3), "valid pixels convert back to their dB values"

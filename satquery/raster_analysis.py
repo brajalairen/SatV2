@@ -9,7 +9,7 @@ statistics (sar/backscatter.py), and the pixel-difference change detection (chan
 import numpy as np
 from scipy import ndimage
 
-from satquery.imaging import RasterImage, sar_db, stretch
+from satquery.imaging import RasterImage, percentile_bounds, sar_db, stretch
 
 
 def otsu(values: np.ndarray, bins: int = 256) -> tuple[float, float]:
@@ -29,6 +29,19 @@ def otsu(values: np.ndarray, bins: int = 256) -> tuple[float, float]:
     best = int(np.argmax(between))
     total_var = float(np.var(finite))
     return float(centers[best]), float(between[best] / total_var) if total_var > 0 else 0.0
+
+
+def coverage(mask: np.ndarray, valid: np.ndarray | None = None) -> float:
+    """Share of the analysed pixels that `mask` covers.
+
+    Pixels outside `valid` (nodata, including pixels outside a drawn circle or polygon) are not
+    counted, so a masked-out area cannot dilute the figure. Returns a NumPy float, exactly what
+    `mask.mean()` returned before nodata was accounted for.
+    """
+    if valid is None or valid.all():
+        return mask.mean()
+    count = int(valid.sum())
+    return (mask & valid).sum() / count if count else np.float64(0.0)
 
 
 def band_stats(band: np.ndarray) -> dict:
@@ -61,14 +74,24 @@ def backscatter_stats(image: RasterImage) -> dict:
 def sar_water_mask(image: RasterImage, smoothing_window: int = 5) -> tuple[np.ndarray, dict]:
     """Water appears dark (specular reflection). Speckle is averaged in the linear domain, then Otsu is applied in dB."""
     co_db, _, units = sar_db(image)
-    linear = np.power(10.0, np.nan_to_num(co_db, nan=np.nanmin(co_db)) / 10)
-    smoothed_db = 10 * np.log10(np.clip(ndimage.uniform_filter(linear, size=smoothing_window), 1e-6, None))
-    smoothed_db[~np.isfinite(co_db)] = np.nan
+    valid = np.isfinite(co_db)
+    if valid.all():
+        linear = np.power(10.0, np.nan_to_num(co_db, nan=np.nanmin(co_db)) / 10)
+        smoothed = ndimage.uniform_filter(linear, size=smoothing_window)
+    else:
+        # Average over valid neighbours only (normalised convolution), so nodata, including the
+        # outside of a drawn circle or polygon, does not darken the pixels next to it into "water".
+        linear = np.where(valid, np.power(10.0, np.where(valid, co_db, 0.0) / 10), 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            smoothed = (ndimage.uniform_filter(linear, size=smoothing_window)
+                        / ndimage.uniform_filter(valid.astype(np.float64), size=smoothing_window))
+    smoothed_db = 10 * np.log10(np.clip(np.nan_to_num(smoothed, nan=1e-6), 1e-6, None))
+    smoothed_db[~valid] = np.nan
     threshold, separability = otsu(smoothed_db)
     mask = np.nan_to_num(smoothed_db < threshold, nan=False).astype(bool)
     mask = ndimage.binary_opening(mask, iterations=1)
     return mask, {"threshold_db": threshold, "separability": separability, "units": units,
-                  "fraction": float(mask.mean())}
+                  "fraction": float(coverage(mask, valid))}
 
 
 def sar_bright_mask(image: RasterImage, percentile: float = 90) -> tuple[np.ndarray, dict]:
@@ -76,27 +99,43 @@ def sar_bright_mask(image: RasterImage, percentile: float = 90) -> tuple[np.ndar
     co_db, _, units = sar_db(image)
     threshold = float(np.nanpercentile(co_db, percentile))
     mask = ndimage.binary_opening(np.nan_to_num(co_db > threshold, nan=False).astype(bool))
-    return mask, {"threshold_db": threshold, "percentile": percentile, "units": units, "fraction": float(mask.mean())}
+    return mask, {"threshold_db": threshold, "percentile": percentile, "units": units,
+                  "fraction": float(coverage(mask, np.isfinite(co_db)))}
 
 
 def change_map(before: RasterImage, after: RasterImage, min_region_px: int = 16) -> tuple[np.ndarray, dict]:
     """Change magnitude with an Otsu threshold.
 
-    Optical: change-vector magnitude over per-image percentile-normalised bands.
-    SAR: absolute log-ratio (dB difference).
+    Optical: change-vector magnitude over bands put on one scale shared by both dates.
+    SAR: absolute log-ratio (dB difference), already a common scale.
+
+    The two dates must be measured against the same reference. Scaling each date by its own
+    percentiles (as this did before 2026-09-20) makes unchanged ground look different whenever the
+    other date's distribution moves, and cancels a change that shifts the whole scene.
     """
     if before.modality == "sar":
         magnitude = np.abs(sar_db(after)[0] - sar_db(before)[0])
         method = "SAR log-ratio |dB2 - dB1| + Otsu"
     else:
         n = min(before.data.shape[0], after.data.shape[0])
-        norm = lambda img, k: stretch(img.data[k]).astype(np.float32) / 255
-        magnitude = np.sqrt(sum((norm(after, k) - norm(before, k)) ** 2 for k in range(n)))
-        method = "change-vector magnitude on percentile-normalised bands + Otsu"
+        squares = np.zeros(before.data.shape[1:], dtype=np.float32)
+        for k in range(n):
+            # One percentile range per band, from both dates pooled: unchanged ground then maps to
+            # the same value on both dates, and a real difference survives.
+            bounds = percentile_bounds(np.concatenate([before.data[k].ravel(), after.data[k].ravel()]))
+            scaled = lambda band: stretch(band, bounds=bounds).astype(np.float32) / 255
+            squares += (scaled(after.data[k]) - scaled(before.data[k])) ** 2
+        magnitude = np.sqrt(squares)
+        # stretch() renders nodata as 0; keep it out of the Otsu histogram and out of the result.
+        missing = ~(np.isfinite(before.data).any(axis=0) & np.isfinite(after.data).any(axis=0))
+        if missing.any():
+            magnitude[missing] = np.nan
+        method = "change-vector magnitude on bands scaled by one range shared by both dates + Otsu"
     threshold, separability = otsu(magnitude)
     mask = np.nan_to_num(magnitude > threshold, nan=False).astype(bool)
     mask = remove_small_regions(ndimage.binary_opening(mask), min_region_px)
-    return mask, {"method": method, "threshold": threshold, "separability": separability, "fraction": float(mask.mean())}
+    return mask, {"method": method, "threshold": threshold, "separability": separability,
+                  "fraction": float(coverage(mask, np.isfinite(magnitude)))}
 
 
 def remove_small_regions(mask: np.ndarray, min_px: int) -> np.ndarray:
@@ -108,8 +147,8 @@ def remove_small_regions(mask: np.ndarray, min_px: int) -> np.ndarray:
     return keep
 
 
-def regions(mask: np.ndarray, max_regions: int = 5) -> list[dict]:
-    """Largest connected regions: pixel bbox, share of image, location phrase."""
+def regions(mask: np.ndarray, max_regions: int = 5, valid: np.ndarray | None = None) -> list[dict]:
+    """Largest connected regions: pixel bbox, share of the analysed pixels (see `coverage`), location phrase."""
     labels, count = ndimage.label(mask)
     if count == 0:
         return []
@@ -117,11 +156,12 @@ def regions(mask: np.ndarray, max_regions: int = 5) -> list[dict]:
     order = np.argsort(sizes)[::-1][:max_regions]
     slices = ndimage.find_objects(labels)
     height, width = mask.shape
+    total = mask.size if valid is None or valid.all() else max(int(valid.sum()), 1)
     found = []
     for k in order:
         sy, sx = slices[k]
         bbox = (float(sx.start), float(sy.start), float(sx.stop), float(sy.stop))
-        found.append({"bbox": bbox, "fraction": float(sizes[k] / mask.size),
+        found.append({"bbox": bbox, "fraction": float(sizes[k] / total),
                       "location": location_phrase(bbox, width, height)})
     return found
 

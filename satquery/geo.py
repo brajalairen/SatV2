@@ -131,6 +131,71 @@ def summarize(image: RasterImage, index: int) -> "ImageSummary":
     return summary
 
 
+# --------------------------------------------------------------------------- drawn areas
+# A drawn area arrives as a GeoJSON Polygon or MultiPolygon in WGS84: rectangles and polygons as
+# drawn, circles as the polygon approximation the map drew. Positions are (longitude, latitude).
+
+
+def _polygons(geometry: dict) -> list:
+    return [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
+
+
+def _positions(geometry: dict) -> list[tuple[float, float]]:
+    return [(p[0], p[1]) for polygon in _polygons(geometry) for ring in polygon for p in ring]
+
+
+def geometry_problem(geometry: dict) -> str | None:
+    """Why `geometry` is not a usable WGS84 area, or None when it is."""
+    if geometry.get("type") not in ("Polygon", "MultiPolygon"):
+        return "the area must be a Polygon or MultiPolygon"
+    try:
+        polygons = _polygons(geometry)
+        if not polygons:
+            return "the area has no polygons"
+        for polygon in polygons:
+            if not polygon:
+                return "a polygon has no rings"
+            for ring in polygon:
+                if len(ring) < 4:
+                    return "a polygon ring needs at least 4 positions"
+                for position in ring:
+                    longitude, latitude = float(position[0]), float(position[1])
+                    if not (_finite(longitude) and _finite(latitude)):
+                        return "the area has a non-finite coordinate"
+                    if not (-180 <= longitude <= 180 and -90 <= latitude <= 90):
+                        return "the area has a coordinate outside longitude/latitude range"
+    except (TypeError, IndexError, KeyError, ValueError):
+        return "the area coordinates are malformed"
+    return None
+
+
+def geometry_bounds(geometry: dict) -> tuple[float, float, float, float]:
+    """(west, south, east, north) of a drawn area."""
+    longitudes, latitudes = zip(*_positions(geometry))
+    return min(longitudes), min(latitudes), max(longitudes), max(latitudes)
+
+
+def is_bounding_box(geometry: dict, tolerance: float = 1e-9) -> bool:
+    """True when the area is exactly its own WGS84 bounding box, i.e. a drawn rectangle.
+
+    Such an area is analysed by the plain box crop, so rectangles keep their original code path.
+    """
+    if geometry["type"] != "Polygon" or len(geometry["coordinates"]) != 1:
+        return False
+    west, south, east, north = geometry_bounds(geometry)
+    near = lambda a, b: abs(a - b) <= tolerance
+    corners = set()
+    for lon, lat in _positions(geometry):
+        if not ((near(lon, west) or near(lon, east)) and (near(lat, south) or near(lat, north))):
+            return False  # a vertex that is not a corner of the box
+        corners.add((near(lon, east), near(lat, north)))
+    ring = _positions(geometry)
+    # Every edge runs along the box (a diagonal would make a triangle or a bow-tie), and all four
+    # corners are visited.
+    axis_aligned = all(near(a[0], b[0]) or near(a[1], b[1]) for a, b in zip(ring, ring[1:]))
+    return axis_aligned and len(corners) == 4
+
+
 @dataclass(frozen=True)
 class Crop:
     """The result of restricting a raster to a drawn area."""
@@ -139,51 +204,106 @@ class Crop:
     height: int
     source_width: int
     source_height: int
+    masked: bool = False  # pixels outside a non-rectangular area were set to nodata
 
     @property
     def is_whole_image(self) -> bool:
-        return self.width == self.source_width and self.height == self.source_height
+        return self.width == self.source_width and self.height == self.source_height and not self.masked
 
 
 MIN_CROP_PIXELS = 16  # validation.check_images rejects anything smaller
 
 
+class AreaNotUsable(Exception):
+    """Why a raster cannot be restricted to a drawn area. The message is written for the user."""
+
+
+def _inside(geometry_wgs84: dict, crs, transform, shape: tuple[int, int]):
+    """bool (height, width): pixels whose centre lies inside the area, or None if it cannot be projected."""
+    from rasterio.features import geometry_mask
+    from rasterio.warp import transform_geom
+
+    try:
+        projected = transform_geom(WGS84, crs, geometry_wgs84)
+        return geometry_mask([projected], out_shape=shape, transform=transform, invert=True)
+    except Exception:
+        return None
+
+
 def crop_to_bbox(source: str | Path, bbox_wgs84: tuple[float, float, float, float],
-                 destination: Path) -> Crop | None:
+                 destination: Path, geometry_wgs84: dict | None = None) -> Crop:
     """Write the part of `source` inside `bbox_wgs84` to `destination`, preserving georeferencing.
 
     Works on the source file at full resolution, not on a decimated in-memory copy, so the crop is
-    as sharp as the data allows. Returns None when the raster has no CRS, the box misses it, or the
-    overlap is too small to analyse; the caller then falls back to the whole image and says so.
+    as sharp as the data allows. Raises AreaNotUsable, saying why, when the raster has no CRS, the
+    area misses it, or the overlap is too small to analyse; the caller then falls back to the whole
+    image and passes the reason on.
+
+    With `geometry_wgs84` (a circle or polygon), pixels whose centre lies outside it become nodata,
+    so every tool analyses the drawn shape rather than its bounding box. The masked crop is written
+    as float32 with NaN nodata, which is how `imaging.load_image` represents nodata anyway.
     """
+    import numpy as np
     import rasterio
     from rasterio.warp import transform_bounds
     from rasterio.windows import Window, from_bounds, intersection
 
     with rasterio.open(source) as src:
         if src.crs is None:
-            return None
+            raise AreaNotUsable("the image has no coordinate reference system, so a map area cannot be placed on it")
         try:
             bounds = transform_bounds(WGS84, src.crs, *bbox_wgs84, densify_pts=21)
+        except Exception as error:
+            raise AreaNotUsable("the drawn area could not be projected onto the image's coordinate system") from error
+        # Overlap is decided on real coordinates: after rounding to whole pixels a thin overlap
+        # becomes an empty window, which rasterio would report as disjoint.
+        west, south, east, north = bounds
+        if east <= src.bounds.left or west >= src.bounds.right or north <= src.bounds.bottom or south >= src.bounds.top:
+            raise AreaNotUsable("the drawn area does not overlap the image")
+        too_small = AreaNotUsable(f"the part of the image inside the drawn area is smaller than "
+                                  f"{MIN_CROP_PIXELS}x{MIN_CROP_PIXELS} pixels")
+        try:
             requested = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
             window = intersection(requested, Window(0, 0, src.width, src.height))
-        except Exception:
-            return None  # no overlap, or an unprojectable box
+        except Exception as error:  # an overlap narrower than one pixel rounds to an empty window
+            raise too_small from error
 
         width, height = int(window.width), int(window.height)
         if width < MIN_CROP_PIXELS or height < MIN_CROP_PIXELS:
-            return None
-        if width == src.width and height == src.height:
+            raise too_small
+
+        inside = None
+        if geometry_wgs84 is not None:
+            inside = _inside(geometry_wgs84, src.crs, src.window_transform(window), (height, width))
+            if inside is None:
+                raise AreaNotUsable("the drawn shape could not be projected onto the image's coordinate system")
+            if not inside.any():
+                raise AreaNotUsable("no pixel of the image lies inside the drawn shape")
+            if inside.all():
+                inside = None  # the shape covers every pixel of the window: nothing to mask
+
+        if width == src.width and height == src.height and inside is None:
             return Crop(width, height, src.width, src.height)  # nothing to cut
 
-        profile = src.profile | {
-            "width": width,
-            "height": height,
-            "transform": src.window_transform(window),
-            "driver": "GTiff",
-        }
-        data = src.read(window=window)
         descriptions = src.descriptions
+        if inside is None:
+            profile = src.profile | {
+                "width": width,
+                "height": height,
+                "transform": src.window_transform(window),
+                "driver": "GTiff",
+            }
+            data = src.read(window=window)
+        else:
+            # A fresh profile: the source's compression (e.g. JPEG) or predictor may not suit float32.
+            profile = {
+                "driver": "GTiff", "width": width, "height": height, "count": src.count,
+                "dtype": "float32", "crs": src.crs, "transform": src.window_transform(window),
+                "nodata": float("nan"), "compress": "deflate",
+            }
+            data = src.read(window=window, masked=True).astype(np.float32).filled(np.nan)
+            data[:, ~inside] = np.nan
+        source_width, source_height = src.width, src.height
 
     with rasterio.open(destination, "w", **profile) as dst:
         dst.write(data)
@@ -191,5 +311,4 @@ def crop_to_bbox(source: str | Path, bbox_wgs84: tuple[float, float, float, floa
             if description:
                 dst.set_band_description(index + 1, description)
 
-    with rasterio.open(source) as src:
-        return Crop(width, height, src.width, src.height)
+    return Crop(width, height, source_width, source_height, masked=inside is not None)

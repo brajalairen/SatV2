@@ -17,7 +17,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, init);
-  } catch {
+  } catch (error) {
+    if (init?.signal?.aborted) throw error; // cancelled or timed out by the caller, not unreachable
     throw new ApiError("Cannot reach the analysis server. Is it running?", 0);
   }
   if (!response.ok) {
@@ -59,16 +60,24 @@ export const api = {
   analyze: (
     query: string,
     images: { upload_id: string; modality?: Modality; acquired?: string | null }[],
-    options: { aoiBbox?: [number, number, number, number] | null; forcedTask?: TaskType } = {},
+    options: {
+      aoiBbox?: [number, number, number, number] | null;
+      /** The drawn shape itself, so a circle or polygon is analysed as drawn, not as its box. */
+      aoiGeometry?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
+      forcedTask?: TaskType;
+      signal?: AbortSignal;
+    } = {},
   ) =>
     request<AnalyzeResult>("/api/analyze", {
       method: "POST",
+      signal: options.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query,
         images,
         forced_task: options.forcedTask ?? null,
         aoi_bbox: options.aoiBbox ?? null,
+        aoi_geometry: options.aoiGeometry ?? null,
       }),
     }),
 };

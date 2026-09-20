@@ -41,6 +41,8 @@ export function MapView({ children }: { children?: ReactNode }) {
   const [styleReady, setStyleReady] = useState(false);
 
   const theme = useAppStore((s) => s.theme);
+  /** The theme whose basemap is loaded, so the style is only replaced when the theme changes. */
+  const styledTheme = useRef(theme);
   const layers = useAppStore((s) => s.layers);
   // useShallow: visibleOverlays builds a new array each call, which plain reference
   // equality would treat as a change on every render.
@@ -61,7 +63,10 @@ export function MapView({ children }: { children?: ReactNode }) {
     instance.on("style.load", () => setStyleReady(true));
     instance.on("error", (event: ErrorEvent) => {
       // A failed tile fetch must not take the app down: fall back to a plain canvas.
-      if (String(event.error?.message ?? "").includes("style")) instance.setStyle(offlineStyle(theme));
+      if (String(event.error?.message ?? "").includes("style")) {
+        setStyleReady(false);
+        instance.setStyle(offlineStyle(theme), { diff: false });
+      }
     });
     mapRef.current = instance;
     setMap(instance);
@@ -72,11 +77,16 @@ export function MapView({ children }: { children?: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- swap the basemap with the theme, then re-add everything the style dropped
+  // --- swap the basemap with the theme, then re-add everything the style dropped. Never on mount:
+  //     the constructor already loaded this theme's basemap. `diff: false` rebuilds the style, so
+  //     "style.load" fires and every layer effect re-adds its sources. A diff would instead drop the
+  //     sources added at runtime (rasters, drawing) without firing it; re-applying the same style on
+  //     mount did exactly that, intermittently deleting the drawing layers.
   useEffect(() => {
-    if (!map) return;
+    if (!map || styledTheme.current === theme) return;
+    styledTheme.current = theme;
     setStyleReady(false);
-    map.setStyle(basemapUrl(theme));
+    map.setStyle(basemapUrl(theme), { diff: false });
   }, [map, theme]);
 
   // --- uploaded rasters
@@ -91,10 +101,12 @@ export function MapView({ children }: { children?: ReactNode }) {
     syncOverlays(map, overlays);
   }, [map, styleReady, overlays]);
 
-  // --- area of interest, kept above the rasters and overlays so the selection stays visible
+  // --- area of interest, kept above the rasters and overlays so the selection stays visible; the
+  //     shape being drawn goes above that, so it is never hidden under the imagery
   useEffect(() => {
     if (!map || !styleReady) return;
     syncAoi(map, aoi?.feature ?? null);
+    raiseDrawingLayers(map);
   }, [map, styleReady, aoi, layers, overlays]);
 
   return (
@@ -189,6 +201,14 @@ function syncAoi(map: MapLibreMap, feature: GeoJSON.Feature | null) {
       "circle-stroke-color": "#ffffff",
     },
   });
+}
+
+/** Terra Draw's layers (id prefix "td-") hold the shape being drawn. They are added once, when
+ *  drawing is set up, so every raster added later would stack above them and hide the shape. */
+function raiseDrawingLayers(map: MapLibreMap) {
+  (map.getStyle()?.layers ?? [])
+    .filter((layer) => layer.id.startsWith("td-"))
+    .forEach((layer) => map.moveLayer(layer.id));
 }
 
 /** Drop sources (and their layers) whose prefix matches but that the store no longer wants. */

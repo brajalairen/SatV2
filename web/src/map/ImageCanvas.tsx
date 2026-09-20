@@ -4,7 +4,7 @@
  *  placed geographically, so rather than guessing a location they open here: a floating panel over
  *  the map, with the same command bar and the same result card. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, ImageOff, Minus, Plus, X } from "lucide-react";
 import { useAppStore } from "../state/useAppStore";
 import { Button, IconButton, Surface } from "../ui/primitives";
@@ -14,10 +14,18 @@ export function ImageCanvas() {
   const removeLayer = useAppStore((s) => s.removeLayer);
   const [index, setIndex] = useState(0);
   const [zoom, setZoom] = useState(1);
-  const [dismissed, setDismissed] = useState(false);
 
   const offMap = layers.filter((layer) => !layer.mappable);
-  if (!offMap.length || dismissed) return null;
+  const newest = offMap[offMap.length - 1]?.id ?? null;
+  // Hiding the viewer hides it for the images already there. A newly added one opens it again, on
+  // itself, rather than arriving unseen.
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (newest) setIndex(offMap.length - 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newest]);
+
+  if (!offMap.length || dismissedAt === newest) return null;
 
   const current = offMap[Math.min(index, offMap.length - 1)]!;
 
@@ -38,7 +46,7 @@ export function ImageCanvas() {
           <IconButton
             label="Hide viewer"
             side="left"
-            onClick={() => setDismissed(true)}
+            onClick={() => setDismissedAt(newest)}
             className="h-7 w-7"
           >
             <X className="h-4 w-4" strokeWidth={2} />

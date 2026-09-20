@@ -125,12 +125,29 @@ def _load_plain(path: Path, modality: str, acquired: str | None, max_pixels: int
                        acquired=acquired, decimation=scale, band_names_assumed=True, display_ready=True)
 
 
-def stretch(band: np.ndarray, low: float = 2, high: float = 98) -> np.ndarray:
-    """Percentile stretch to uint8 for display; NaN becomes 0."""
-    finite = band[np.isfinite(band)]
+def percentile_bounds(values: np.ndarray, low: float = 2, high: float = 98) -> tuple[float, float] | None:
+    """The (low, high) percentile pair that `stretch` scales by, or None when nothing is finite.
+
+    Computed once from several arrays, it puts them all on one scale: `raster_analysis.change_map`
+    needs both dates of a pair measured against the same reference.
+    """
+    finite = values[np.isfinite(values)]
     if finite.size == 0:
-        return np.zeros(band.shape, dtype=np.uint8)
+        return None
     lo, hi = np.percentile(finite, [low, high])
+    return float(lo), float(hi)
+
+
+def stretch(band: np.ndarray, low: float = 2, high: float = 98,
+            bounds: tuple[float, float] | None = None) -> np.ndarray:
+    """Percentile stretch to uint8 for display; NaN becomes 0.
+
+    `bounds` applies a scale computed elsewhere instead of this band's own percentiles.
+    """
+    limits = bounds if bounds is not None else percentile_bounds(band, low, high)
+    if limits is None:
+        return np.zeros(band.shape, dtype=np.uint8)
+    lo, hi = limits
     scaled = (band - lo) / (hi - lo) if hi > lo else np.zeros_like(band)
     return (np.nan_to_num(np.clip(scaled, 0, 1)) * 255).astype(np.uint8)
 
@@ -138,9 +155,11 @@ def stretch(band: np.ndarray, low: float = 2, high: float = 98) -> np.ndarray:
 def sar_db(image: RasterImage) -> tuple[np.ndarray, np.ndarray | None, str]:
     """Co- and cross-pol backscatter in dB. Units are inferred, and the inference is reported.
 
-    Negative values mean the data are already in dB. Otherwise the data are treated as
-    linear intensity and converted to dB. RISAT calibration is UNKNOWN, so callers must
-    not rely on absolute thresholds.
+    A negative median means the data are already in dB: backscatter in dB sits mostly below zero,
+    while linear intensity never has a negative median, even when noise subtraction leaves a few
+    negative samples (a single negative value is therefore not evidence of dB). Otherwise the data
+    are treated as linear intensity and converted to dB. RISAT calibration is UNKNOWN, so callers
+    must not rely on absolute thresholds.
     """
     co = image.band("copol")
     co = image.data[0] if co is None else co
@@ -149,8 +168,8 @@ def sar_db(image: RasterImage) -> tuple[np.ndarray, np.ndarray | None, str]:
         cross = image.data[1]
     if image.display_ready:
         return co, cross, "display-scaled 8-bit intensity (not backscatter)"
-    if np.nanmin(co) < 0:
-        return co, cross, "dB (input contained negative values)"
+    if np.isfinite(co).any() and np.nanmedian(co) < 0:
+        return co, cross, "dB (inferred: most values are negative)"
     to_db = lambda b: 10 * np.log10(np.clip(b, 1e-6, None)) if b is not None else None
     return to_db(co), to_db(cross), "linear intensity converted to dB (assumed)"
 

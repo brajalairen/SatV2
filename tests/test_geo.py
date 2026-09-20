@@ -123,13 +123,14 @@ def test_crop_declines_rather_than_guessing(write_tiff, tmp_path, scene):
     west, south, east, north = geo.georeference(load_image(path, "optical")).bounds_wgs84
     destination = tmp_path / "out.tif"
 
-    # No overlap at all.
-    assert geo.crop_to_bbox(path, (10.0, 50.0, 10.1, 50.1), destination) is None
-    # Overlap smaller than validation's 16 px floor.
+    # Each refusal says why, so the result card can pass the real reason on.
+    with pytest.raises(geo.AreaNotUsable, match="does not overlap"):
+        geo.crop_to_bbox(path, (10.0, 50.0, 10.1, 50.1), destination)
     sliver = (west, south, west + (east - west) * 0.02, south + (north - south) * 0.02)
-    assert geo.crop_to_bbox(path, sliver, destination) is None
-    # A raster with no CRS cannot be cut by a geographic box.
-    assert geo.crop_to_bbox(write_tiff("plain.tif", scene, crs=None), (west, south, east, north), destination) is None
+    with pytest.raises(geo.AreaNotUsable, match="smaller than 16x16"):
+        geo.crop_to_bbox(path, sliver, destination)
+    with pytest.raises(geo.AreaNotUsable, match="no coordinate reference system"):
+        geo.crop_to_bbox(write_tiff("plain.tif", scene, crs=None), (west, south, east, north), destination)
 
 
 def test_crop_covering_everything_reports_the_whole_image(write_tiff, tmp_path, scene):
@@ -138,3 +139,83 @@ def test_crop_covering_everything_reports_the_whole_image(write_tiff, tmp_path, 
     crop = geo.crop_to_bbox(path, bounds, tmp_path / "out.tif")
 
     assert crop is not None and crop.is_whole_image
+
+
+# --------------------------------------------------------------------------- drawn areas
+
+
+def ring_polygon(bounds, scale=0.45, segments=64):
+    """A closed circle-like polygon centred in `bounds`, as the map draws a circle AOI."""
+    import math
+    west, south, east, north = bounds
+    cx, cy = (west + east) / 2, (south + north) / 2
+    rx, ry = (east - west) * scale, (north - south) * scale
+    ring = [[cx + rx * math.cos(2 * math.pi * k / segments), cy + ry * math.sin(2 * math.pi * k / segments)]
+            for k in range(segments)]
+    return {"type": "Polygon", "coordinates": [ring + [ring[0]]]}
+
+
+def box_polygon(west, south, east, north):
+    return {"type": "Polygon", "coordinates": [[[west, south], [east, south], [east, north], [west, north], [west, south]]]}
+
+
+def test_geometry_problem_accepts_polygons_and_explains_rejections():
+    assert geo.geometry_problem(box_polygon(75.0, 25.0, 75.1, 25.1)) is None
+    assert geo.geometry_problem({"type": "MultiPolygon", "coordinates": [box_polygon(75.0, 25.0, 75.1, 25.1)["coordinates"]]}) is None
+
+    assert "Polygon" in geo.geometry_problem({"type": "Point", "coordinates": [75.0, 25.0]})
+    assert "4 positions" in geo.geometry_problem({"type": "Polygon", "coordinates": [[[75, 25], [75.1, 25], [75, 25]]]})
+    assert "range" in geo.geometry_problem(box_polygon(75.0, 25.0, 190.0, 25.1))
+    assert "malformed" in geo.geometry_problem({"type": "Polygon", "coordinates": [[["a", 1]] * 4]})
+
+
+def test_a_drawn_rectangle_is_recognised_as_its_own_bounding_box():
+    assert geo.is_bounding_box(box_polygon(75.0, 25.0, 75.1, 25.1))
+    assert not geo.is_bounding_box(ring_polygon((75.0, 25.0, 75.1, 25.1)))
+    triangle = {"type": "Polygon", "coordinates": [[[75.0, 25.0], [75.1, 25.0], [75.0, 25.1], [75.0, 25.0]]]}
+    assert not geo.is_bounding_box(triangle), "three corners of the box are not the box"
+    bow_tie = {"type": "Polygon", "coordinates": [[[75.0, 25.0], [75.1, 25.1], [75.1, 25.0], [75.0, 25.1], [75.0, 25.0]]]}
+    assert not geo.is_bounding_box(bow_tie), "all four corners, visited diagonally, are not the box"
+    assert geo.geometry_bounds(triangle) == (75.0, 25.0, 75.1, 25.1)
+
+
+def test_circle_crop_masks_the_outside_and_keeps_georeferencing(write_tiff, tmp_path):
+    data = np.full((2, 64, 64), 500, dtype=np.uint16)
+    path = write_tiff("wide.tif", data, band_names=["copol", "crosspol"])
+    bounds = geo.georeference(load_image(path, "sar")).bounds_wgs84
+    circle = ring_polygon(bounds)
+
+    destination = tmp_path / "circle.tif"
+    crop = geo.crop_to_bbox(path, geo.geometry_bounds(circle), destination, circle)
+
+    assert crop is not None and crop.masked and not crop.is_whole_image
+    cropped = load_image(destination, "sar")
+    assert cropped.crs == "EPSG:32643" and cropped.band_names == ["copol", "crosspol"]
+    valid = np.isfinite(cropped.data).all(axis=0)
+    height, width = valid.shape
+    assert valid[height // 2, width // 2], "the centre of the circle is analysed"
+    assert not valid[0, 0] and not valid[-1, -1], "the corners outside the circle are nodata"
+    assert np.all(cropped.data[:, valid] == 500), "pixels inside keep their values"
+    # A circle inscribed in its box covers pi/4 of it.
+    assert valid.mean() == pytest.approx(np.pi / 4, abs=0.05)
+
+
+def test_shape_covering_the_whole_window_is_not_masked(write_tiff, tmp_path, scene):
+    path = write_tiff("utm.tif", scene)
+    west, south, east, north = geo.georeference(load_image(path, "optical")).bounds_wgs84
+    pad_x, pad_y = east - west, north - south
+    # A polygon far larger than the raster, so every pixel centre lies inside it.
+    huge = ring_polygon((west - pad_x, south - pad_y, east + pad_x, north + pad_y), scale=0.6)
+    crop = geo.crop_to_bbox(path, (west, south, east, north), tmp_path / "out.tif", huge)
+
+    assert crop is not None and not crop.masked and crop.is_whole_image
+
+
+def test_shape_with_no_pixel_centre_inside_is_declined(write_tiff, tmp_path, scene):
+    path = write_tiff("utm.tif", scene)
+    west, south, east, north = geo.georeference(load_image(path, "optical")).bounds_wgs84
+    # A thin sliver along the west edge: the window is large enough, but no pixel centre is inside.
+    sliver = {"type": "Polygon", "coordinates": [[[west, south], [west + 1e-7, south], [west + 1e-7, north],
+                                                  [west, north], [west, south]]]}
+    with pytest.raises(geo.AreaNotUsable, match="no pixel"):
+        geo.crop_to_bbox(path, (west, south, east, north), tmp_path / "out.tif", sliver)

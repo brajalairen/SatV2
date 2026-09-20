@@ -7,6 +7,7 @@ torch/transformers are imported lazily so the rest of the app (and the tests) ne
 """
 
 import re
+import threading
 from unittest.mock import patch
 
 import numpy as np
@@ -77,8 +78,15 @@ class FalconVLM:
         self.max_new_tokens = max_new_tokens
         self.model = None
         self.processor = None
+        # One model, one GPU: loads and generations run one at a time. The HTTP server calls in from a
+        # thread pool, and concurrent generate() calls on a 6 GB card risk running out of memory.
+        self._lock = threading.RLock()
 
     def load(self) -> "FalconVLM":
+        with self._lock:
+            return self._load()
+
+    def _load(self) -> "FalconVLM":
         if self.model is not None:
             return self
         import torch
@@ -102,9 +110,13 @@ class FalconVLM:
         return self
 
     def _generate(self, prompt: str, rgb: np.ndarray) -> tuple[str, float | None]:
+        with self._lock:
+            return self._generate_unlocked(prompt, rgb)
+
+    def _generate_unlocked(self, prompt: str, rgb: np.ndarray) -> tuple[str, float | None]:
         import torch
 
-        self.load()
+        self._load()
         inputs = self.processor(text=prompt, images=Image.fromarray(rgb), return_tensors="pt")
         with torch.inference_mode():
             output = self.model.generate(

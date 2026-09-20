@@ -41,14 +41,32 @@ def side_by_side(left: np.ndarray, right: np.ndarray, gap: int = 8) -> np.ndarra
     return canvas
 
 
-def save_png(array: np.ndarray, path: Path) -> str:
+def save_png(array: np.ndarray, path: Path, alpha: np.ndarray | None = None) -> str:
+    """`alpha` (bool, height x width) makes the pixels outside it transparent, so an overlay pinned to
+    the map shows the analysed shape (e.g. a drawn circle) instead of black nodata corners."""
+    if alpha is not None and alpha.shape == array.shape[:2] and not alpha.all():
+        array = np.dstack([array, np.where(alpha, 255, 0).astype(np.uint8)])
     Image.fromarray(array).save(path)
     return str(path)
 
 
+def portable(response: AnalysisResponse) -> AnalysisResponse:
+    """A copy whose file references are names within the run folder, not paths on this machine.
+
+    Report files travel (downloaded, emailed, attached to a submission), and an absolute path would
+    both break there and disclose the server's folder layout.
+    """
+    copy = response.model_copy(deep=True)
+    for item in copy.evidence:
+        if item.file:
+            item.file = Path(item.file).name
+    copy.report_html, copy.report_json = "report.html", "report.json"
+    return copy
+
+
 def write_reports(response: AnalysisResponse, run_dir: Path) -> tuple[str, str]:
     json_path = run_dir / "report.json"
-    json_path.write_text(response.model_dump_json(indent=2), encoding="utf-8")
+    json_path.write_text(portable(response).model_dump_json(indent=2), encoding="utf-8")
 
     def embed(path: str) -> str:
         data = base64.b64encode(Path(path).read_bytes()).decode()

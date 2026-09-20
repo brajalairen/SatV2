@@ -1,6 +1,17 @@
 /** The bottom command bar: add something, ask about it, optionally by voice. */
 
 import { useEffect, useRef, useState } from "react";
+
+/** Seconds since this mounted, i.e. since the analysis started. */
+function Elapsed() {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const timer = setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return <span className="tabular-nums">{seconds} s</span>;
+}
 import { ArrowUp, Plus, SquareDashed } from "lucide-react";
 import { useAppStore, selectAnalysisImages } from "../state/useAppStore";
 import { api } from "../state/api";
@@ -21,6 +32,7 @@ export function AICommandBar() {
   const aoi = useAppStore((s) => s.aoi);
   const openSection = useAppStore((s) => s.openSection);
   const runAnalysis = useAppStore((s) => s.runAnalysis);
+  const cancelAnalysis = useAppStore((s) => s.cancelAnalysis);
   const pendingQuery = useAppStore((s) => s.pendingQuery);
   const setPendingQuery = useAppStore((s) => s.setPendingQuery);
 
@@ -97,6 +109,23 @@ export function AICommandBar() {
       {error && (
         <Surface className="pointer-events-auto max-w-[720px] border-danger/40 px-3 py-2 text-[12px] text-danger">
           {error}
+        </Surface>
+      )}
+
+      {/* A real model can take a minute: show that work is happening, and let it be abandoned. */}
+      {pending && (
+        <Surface role="status" className="pointer-events-auto flex items-center gap-2.5 py-1.5 pr-1.5 pl-3 text-[12px] text-muted">
+          <Spinner className="h-3.5 w-3.5 text-accent" />
+          <span>
+            Analysing <Elapsed />
+          </span>
+          <button
+            type="button"
+            onClick={cancelAnalysis}
+            className="rounded-[var(--radius-sm)] px-2 py-1 font-medium text-ink transition-colors hover:bg-hover"
+          >
+            Cancel
+          </button>
         </Surface>
       )}
 

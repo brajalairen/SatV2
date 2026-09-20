@@ -1,16 +1,17 @@
 /** Area selection. Rectangle is the default tool; the rest are there for people who want them. */
 
-import { Circle, Hexagon, MapPin, Square, Trash2 } from "lucide-react";
+import { Circle, Hexagon, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useAppStore, type DrawMode } from "../state/useAppStore";
 import { useMap, fitBounds } from "../map/MapView";
 import { Button, cx, inputClass, Surface } from "../ui/primitives";
 
 const TOOLS: { mode: Exclude<DrawMode, null>; label: string; icon: typeof Square; hint: string }[] = [
-  { mode: "rectangle", label: "Rectangle", icon: Square, hint: "Drag a box, or click two opposite corners" },
+  // Every tool encloses an area: the analysis restricts itself to the pixels inside the shape, so a
+  // single point has nothing to offer here (D-025).
+  { mode: "rectangle", label: "Rectangle", icon: Square, hint: "Press and drag across the map, then release" },
   { mode: "polygon", label: "Polygon", icon: Hexagon, hint: "Click each corner, then click the first again" },
-  { mode: "circle", label: "Circle", icon: Circle, hint: "Drag out from the centre, or click centre then edge" },
-  { mode: "point", label: "Point", icon: MapPin, hint: "Click a single location" },
+  { mode: "circle", label: "Circle", icon: Circle, hint: "Press at the centre, drag outward, then release" },
 ];
 
 export function AreaSelectionTools() {

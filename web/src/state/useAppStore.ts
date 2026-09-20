@@ -5,7 +5,8 @@ import { create } from "zustand";
 import { api, ApiError } from "./api";
 import type { AnalyzeResult, Modality, OverlayLayer, TaskType, UploadInfo } from "./types";
 
-export type DrawMode = "rectangle" | "polygon" | "circle" | "point" | null;
+/** Area-enclosing shapes only: a point cannot restrict an analysis (D-025). */
+export type DrawMode = "rectangle" | "polygon" | "circle" | null;
 export type SidebarSection = "search" | "select" | "layers" | "saved" | "help" | null;
 
 /** A loaded raster plus its display state. `mappable` decides map layer vs off-map viewer. */
@@ -62,6 +63,8 @@ interface AppState {
   removeSavedArea: (id: string) => void;
 
   runAnalysis: (query: string, forcedTask?: TaskType) => Promise<void>;
+  /** Stops waiting for the running analysis. The server finishes its current run regardless. */
+  cancelAnalysis: () => void;
   clearResult: () => void;
   toggleOverlay: (url: string) => void;
 
@@ -77,11 +80,22 @@ interface AppState {
 const SAVED_AREAS_KEY = "satquery.savedAreas";
 const THEME_KEY = "satquery.theme";
 
+/** Longest wait for one analysis. A real model on CPU takes about a minute for the longest plans. */
+const ANALYSIS_TIMEOUT_MS = 3 * 60 * 1000;
+/** Aborting stops the wait only: the server thread finishes its run, and the model lock queues the
+ *  next question behind it. The messages say so rather than implying the work was undone. */
+const STOPPED_WAITING = "Stopped waiting for this analysis. If the server was still working, your next question starts once it finishes.";
+const TIMED_OUT = "No answer after 3 minutes, so the app stopped waiting. The server may still be busy; try again shortly.";
+/** The analysis in flight, if any. Outside the store: it is a handle, not state to render. */
+let inflight: AbortController | null = null;
+
 /** Browser storage is a per-viewer convenience here: it must never break the app when unavailable. */
 function readSavedAreas(): SavedArea[] {
   try {
     const raw = localStorage.getItem(SAVED_AREAS_KEY);
-    return raw ? (JSON.parse(raw) as SavedArea[]) : [];
+    const saved = raw ? (JSON.parse(raw) as SavedArea[]) : [];
+    // Points saved before D-025 can no longer restrict anything, so they are not offered.
+    return saved.filter((area) => area.geometry?.geometry?.type !== "Point");
   } catch {
     return [];
   }
@@ -112,6 +126,12 @@ export function applyTheme(theme: "light" | "dark"): void {
   } catch {
     /* ignore */
   }
+}
+
+/** The drawn shape to analyse, when it encloses an area. */
+export function areaGeometry(aoi: Aoi | null): GeoJSON.Polygon | GeoJSON.MultiPolygon | null {
+  const geometry = aoi?.feature.geometry;
+  return geometry && (geometry.type === "Polygon" || geometry.type === "MultiPolygon") ? geometry : null;
 }
 
 /**
@@ -154,10 +174,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeLayer: (id) =>
     set((state) => {
       const layers = state.layers.filter((l) => l.id !== id);
-      // A result describes the images it ran on; dropping one of those makes it stale.
-      const stale = state.result?.response.trace.images.some(
-        (image) => !layers.some((layer) => layer.name === image.name),
-      );
+      // A result describes the images it ran on; dropping one of those makes it stale. Matched by
+      // upload id: names repeat, and a drawn area analyses a cropped copy under another name.
+      const stale = state.result?.upload_ids.includes(id) ?? false;
       return { layers, result: stale ? null : state.result, detailsOpen: stale ? false : state.detailsOpen };
     }),
 
@@ -211,20 +230,35 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return;
     }
+    const controller = new AbortController();
+    inflight = controller;
+    const timer = setTimeout(() => controller.abort("timeout"), ANALYSIS_TIMEOUT_MS);
     set({ pending: true, error: null, result: null, detailsOpen: false, hiddenOverlays: new Set() });
     try {
       const result = await api.analyze(
         query,
         images.map((l) => ({ upload_id: l.id, modality: l.modality, acquired: l.acquired })),
-        // A drawn area restricts the analysis to the part of each image inside it.
-        { aoiBbox: aoi?.bounds ?? null, forcedTask },
+        // A drawn area restricts the analysis to the part of each image inside it: the shape itself
+        // for a rectangle, circle or polygon; the box alone for anything else.
+        { aoiBbox: aoi?.bounds ?? null, aoiGeometry: areaGeometry(aoi), forcedTask, signal: controller.signal },
       );
       set({ result, pending: false });
     } catch (error) {
-      const message = error instanceof ApiError ? error.message : "The analysis failed unexpectedly.";
+      const message = controller.signal.aborted
+        ? controller.signal.reason === "timeout"
+          ? TIMED_OUT
+          : STOPPED_WAITING
+        : error instanceof ApiError
+          ? error.message
+          : "The analysis failed unexpectedly.";
       set({ error: message, pending: false });
+    } finally {
+      clearTimeout(timer);
+      if (inflight === controller) inflight = null;
     }
   },
+
+  cancelAnalysis: () => inflight?.abort("cancelled"),
 
   clearResult: () => set({ result: null, detailsOpen: false, error: null, hiddenOverlays: new Set() }),
 

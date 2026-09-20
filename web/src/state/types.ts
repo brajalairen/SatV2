@@ -122,12 +122,16 @@ export interface AreaScope {
   height: number | null;
   source_width: number | null;
   source_height: number | null;
+  /** Pixels outside a drawn circle or polygon were excluded, not merely cropped to its box. */
+  masked: boolean;
 }
 
 export interface AnalyzeResult {
   response: AnalysisResponse;
   overlay_layers: OverlayLayer[];
   area: AreaScope | null;
+  /** The uploads this result ran on, in input order. */
+  upload_ids: string[];
 }
 
 export interface UploadInfo {

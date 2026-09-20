@@ -46,6 +46,9 @@ If sources disagree, report the discrepancy instead of silently picking one.
 - **Fact (Colab FAQ):** free Colab runtimes disallow "bypassing the notebook UI to interact primarily via a web UI".
 
 ## 4. Current state (update when it changes)
+<!-- Round 1 decisions of 2026-09-20: D-024 map-first app is the submission, D-025 point tool removed,
+     D-026 change map uses one shared scale. Adaptation plan: docs/adaptation-plan.md. -->
+
 | Area | Status |
 |---|---|
 | GeoChat-7B VQA (4-bit, Colab T4, Python 3.10, transformers 4.31) | Worked in Colab per `Initial.md`. **Deferred to [POST-SEL]** (D-022). The GeoChat Colab notebook is **out of scope** (D-018). |
@@ -53,14 +56,15 @@ If sources disagree, report the discrepancy instead of silently picking one.
 | `satquery/` package: imaging, validation, rule-based agent, tool registry, evidence/reports, Gradio UI, CLI | Implemented (2026-09-17); synthetic-data tests pass. The old `remote_sensing/` package was ported and removed. |
 | Map-first web client: `web/` (React + MapLibre + Vite) served by `satquery/server.py` (FastAPI) | Implemented 2026-09-18 (D-023). Primary interface. Georeferenced uploads are placed on a basemap; evidence overlays are pinned to their raster; trace/confidence/reports sit behind "Details". Verified end to end against all demo scenarios with the fake backend. |
 | Georeferencing: `satquery/geo.py` | Implemented 2026-09-18. Pixel -> WGS84 corners for map placement, and `crop_to_bbox` to restrict an analysis to a drawn area (all-or-nothing across a pair; falls back with a stated reason). Returns `None` without a CRS + transform. Tests in `tests/test_geo.py`. |
+| Drawn areas (`web/src/map/AoiLayer.tsx` -> `aoi_geometry`) | 2026-09-20: rectangle and circle are press-drag-release, anchored at the press point, with the shape visible while dragging. The real geometry reaches the server; circles and polygons are masked to the shape (pixels outside become NaN nodata) and coverage figures count valid pixels only. Rectangles keep the original box crop (outputs verified identical). |
 | Gradio UI (`satquery/ui.py`, `app.py`) | Still working; kept as a fallback and for the HF Spaces path. |
 | VQA, caption, grounding, change analysis, optical–SAR fusion, single-SAR-image path | Implemented. **All 8 demo scenarios validated with real Falcon on GPU (2026-09-17)**, all status ok, no failed steps: VQA, caption, grounding, bi-temporal change, change VQA, optical–SAR fusion (water agreement IoU 0.97), single-SAR water, and grid-mismatch rejection. |
 | Deterministic tools: SAR water/bright masks, NDVI/NDWI, change map, fusion agreement | Implemented; heuristic and labelled as such |
 | BigEarthNet S1 classifier (`specialists/s1_classifier.py`) | Ported, **not registered** as a tool ([R1-OPT], D-015) |
-| Round 1 web-app link | **Gradio share link from the GPU laptop** (`SATQUERY_SHARE=1 python app.py`). Verified 2026-09-17: public URL served HTTP 200 with real Falcon on the RTX 4050; expires after 1 week; laptop must stay online (D-020). |
+| Round 1 web-app link | **Map-first app from the GPU laptop through a tunnel** (`uvicorn satquery.server:app` + `cloudflared tunnel --url http://localhost:8000`), per D-024. The Gradio share link (`SATQUERY_SHARE=1 python app.py`, verified 2026-09-17) stays only as a fallback. Either way the laptop must stay online. Checklist: `docs/round1-submission-kit.md` §3. |
 | HF ZeroGPU deployment (`app.py`, `requirements.txt`, `scripts/deploy_space.py`) | Written but **cannot deploy on a free account**: HF returns HTTP 402 for both `cpu-basic` Gradio and ZeroGPU, as hosting either now requires PRO. Code stays ZeroGPU-compatible for later. |
 | Evaluation harness, batch manifests | Not implemented ([POST-SEL]) |
-| Team-performed fine-tuning/adaptation | Not done ([POST-SEL]; quick fine-tune is [R1-OPT]) |
+| Team-performed fine-tuning/adaptation (SIH R5) | Not done. **Plan written 2026-09-20: `docs/adaptation-plan.md`** (LoRA on Falcon with BigEarthNet.txt VQA pairs, ~2-3 h on the RTX 4050, fallback: train our own BigEarthNet classifier). Nothing trained yet; no claim may be made until it is. |
 
 ## 5. Decisions: `docs/decisions.md` is the source of truth
 - **Approved:** D-001–D-017 (all by default, 2026-09-17), with D-016 replaced by D-018.
@@ -128,6 +132,8 @@ If sources disagree, report the discrepancy instead of silently picking one.
 - New or changed behavior needs tests. Prefer small synthetic rasters generated inside tests over committed data files.
 - Mark tests that need a GPU or model weights (e.g. `gpu`) so they are skipped by default.
 - Test runner: `.venv\Scripts\python -m pytest` (see §14). Tests needing a GPU or model weights are marked `gpu` and skipped by default.
+- Web tests run under Vitest (`cd web; npm test`). Keep them to pure logic and the store: importing `maplibre-gl` or
+  Terra Draw into a test needs a real map, so drawing helpers live in `web/src/map/aoiGeometry.ts` instead.
 
 ## 13. Known limitations (Round 1; do not hide them in answers or slides)
 - Falcon change polygons come back in the top-left ('before') quadrant of the 2x2 composite (seen on 1 sample); `falcon.to_single_frame` wraps coordinates.
@@ -135,10 +141,15 @@ If sources disagree, report the discrepancy instead of silently picking one.
 - SAR masks use per-image adaptive thresholds, so they report relative darkness/brightness, not calibrated classes.
 - Band order is assumed when a GeoTIFF has no band descriptions (validation warns).
 - Confidence values are uncalibrated; every value carries its `method`.
+- The deterministic change map scales both dates by one shared percentile range (D-026), but the **VLM's** change input is
+  still two separately stretched renders (`render_rgb` is per image), so the model may still see rescaling artifacts.
+- Inside a drawn circle or polygon the VLM still receives a rectangular image, with the outside rendered black
+  (nodata). Its masks and boxes are clipped to the shape afterwards, but its free-text answers may still react to the black border.
 
 ## 14. Commands and module map
 Commands:
-- Tests: `.venv\Scripts\python -m pytest`. Fast, synthetic data, no GPU, model tests skipped.
+- Tests (Python): `.venv\Scripts\python -m pytest`. Fast, synthetic data, no GPU, model tests skipped.
+- Tests (web): `cd web; npm test` (Vitest + jsdom, `src/**/*.test.ts`). Geometry and store only: no browser, no server.
 - App (map-first, primary): `uvicorn satquery.server:app` after `cd web && npm run build`. Dev: `npm run dev` beside it.
 - App (Gradio fallback): `app.py`. Choose the backend with `SATQUERY_VLM_BACKEND=fake|falcon`.
 - CLI: `python -m satquery ask --image ... --modality ... --query ...`
