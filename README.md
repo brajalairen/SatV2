@@ -7,7 +7,10 @@ An agentic vision-language assistant for remote-sensing imagery. Supported input
 
 You ask a question in plain language. The agent validates the inputs, plans which specialist tools to run, executes them, and returns an answer with visual evidence, a confidence estimate (with its method), a full execution trace, and a downloadable report.
 
-> **Status: Round 1 prototype.** Heuristic components are labelled in the app. See `docs/decisions.md` for scope and priorities.
+> **Status: Round 1 prototype.** Heuristic components are labelled in the app. See `docs/decisions.md` for scope and
+> priorities, and `docs/handoff-2026-09-20.md` for the current state, what is verified, and what is still open.
+> One mandatory SIH item is still missing: the remote-sensing adaptation (`docs/adaptation-plan.md`). Nothing has been
+> fine-tuned yet, and no claim to the contrary may be made.
 
 ## How it works
 ```text
@@ -113,7 +116,8 @@ tests/                synthetic-data tests (pytest)
 scripts/              data subset, dataset inspection, Space deployment
 experiments/          isolated one-off experiments (not imported by the app)
 demo/examples/        small demo inputs shipped with the app
-docs/                 decisions.md (source of truth), architecture audit
+docs/                 decisions.md (source of truth), handoff-2026-09-20.md (state + next steps),
+                      adaptation-plan.md (SIH R5 fine-tuning plan), round1-submission-kit.md, architecture audit
 CLAUDE.md             rules for AI coding agents
 ```
 

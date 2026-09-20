@@ -27,16 +27,21 @@ Working rules for AI coding agents in this repository. Keep this file short; det
 If sources disagree, report the discrepancy instead of silently picking one.
 
 ## 3. Current stage, constraints and facts
-- **Stage (2026-09-17):** first-round SIH submission due in ~2 days. Deliverables:
+- **Stage (updated 2026-09-20):** preparing the first-round SIH submission. Deliverables:
   - a PPT
   - a demo video
   - a **working web-app link**
 
   The full hackathon comes later, only if the team is selected.
+  The deadline recorded on 2026-09-17 was "~2 days"; that date has passed, so **confirm the real deadline** rather
+  than relying on this line. Current state and next steps: `docs/handoff-2026-09-20.md`.
 - **Priority labels:** tag work as **[R1-REQ]** Round 1 required, **[R1-OPT]** Round 1 optional, **[POST-SEL]** after selection, or **[FUTURE]** production.
 - **Priority rule:** a convincing, working end-to-end demo beats polish. Build the smallest version of the approved architecture that also extends cleanly later.
 - **Compute:** free Colab/Kaggle notebooks + an RTX 4050 Laptop GPU (6 GB total, ~5.2 GB free measured) with 15.6 GB RAM. No paid or institute GPU.
-- **Hosting (D-020):** the web-app link is a free Hugging Face **ZeroGPU** Space. Constraints:
+- **Hosting (D-024, supersedes D-020):** the Round 1 link serves the **map-first app from the GPU laptop through a
+  tunnel** (`uvicorn satquery.server:app` + `cloudflared`). A free HF Space is **not available**: HF returns HTTP 402
+  for both `cpu-basic` Gradio and ZeroGPU without PRO. The code stays ZeroGPU-compatible for later, which is why
+  `app.py` still preloads and these constraints still apply to that path:
   - Gradio SDK only
   - Python 3.12
   - torch ≥ 2.8
@@ -59,7 +64,8 @@ If sources disagree, report the discrepancy instead of silently picking one.
 | Drawn areas (`web/src/map/AoiLayer.tsx` -> `aoi_geometry`) | 2026-09-20: rectangle and circle are press-drag-release, anchored at the press point, with the shape visible while dragging. The real geometry reaches the server; circles and polygons are masked to the shape (pixels outside become NaN nodata) and coverage figures count valid pixels only. Rectangles keep the original box crop (outputs verified identical). |
 | Gradio UI (`satquery/ui.py`, `app.py`) | Still working; kept as a fallback and for the HF Spaces path. |
 | VQA, caption, grounding, change analysis, optical–SAR fusion, single-SAR-image path | Implemented. **All 8 demo scenarios validated with real Falcon on GPU (2026-09-17)**, all status ok, no failed steps: VQA, caption, grounding, bi-temporal change, change VQA, optical–SAR fusion (water agreement IoU 0.97), single-SAR water, and grid-mismatch rejection. |
-| Deterministic tools: SAR water/bright masks, NDVI/NDWI, change map, fusion agreement | Implemented; heuristic and labelled as such |
+| Deterministic tools: SAR water/bright masks, NDVI/NDWI, change map, fusion agreement | Implemented; heuristic and labelled as such. The optical change map scales both dates by **one shared percentile range** (D-026, 2026-09-20), so older bi-temporal figures do not apply. |
+| Tests | Python **110 passing** (`pytest`, synthetic data, no GPU); web **25 passing** (`cd web; npm test`). Whole-app browser checks were run outside the repo in the 2026-09-20 session: see `docs/handoff-2026-09-20.md` §2. |
 | BigEarthNet S1 classifier (`specialists/s1_classifier.py`) | Ported, **not registered** as a tool ([R1-OPT], D-015) |
 | Round 1 web-app link | **Map-first app from the GPU laptop through a tunnel** (`uvicorn satquery.server:app` + `cloudflared tunnel --url http://localhost:8000`), per D-024. The Gradio share link (`SATQUERY_SHARE=1 python app.py`, verified 2026-09-17) stays only as a fallback. Either way the laptop must stay online. Checklist: `docs/round1-submission-kit.md` §3. |
 | HF ZeroGPU deployment (`app.py`, `requirements.txt`, `scripts/deploy_space.py`) | Written but **cannot deploy on a free account**: HF returns HTTP 402 for both `cpu-basic` Gradio and ZeroGPU, as hosting either now requires PRO. Code stays ZeroGPU-compatible for later. |
@@ -74,6 +80,9 @@ If sources disagree, report the discrepancy instead of silently picking one.
   - D-021: Falcon, pending its gate
   - D-022: GeoChat deferred
   - D-023: map-first React client (2026-09-18), which **overrides the map/React cuts in D-012** and the hosting route in D-020
+  - D-024: Round 1 is demoed and submitted on the map-first app, tunnelled from the GPU laptop (2026-09-20); Gradio is a fallback only
+  - D-025: the point tool is removed from area selection (2026-09-20); a point encloses no area
+  - D-026: the bi-temporal change map compares both dates on one shared scale (2026-09-20); **older bi-temporal figures are void**
 - **Before changing behaviour covered by a decision,** read its entry. **Do not decide open items silently;** raise them.
 - **Still excluded (D-012, as amended by D-023):** database, authentication, live imagery retrieval, Docker, co-registration algorithms, LLM planner, multi-agent.
   A map and React are now in scope (D-023); `satquery/server.py` is a thin HTTP layer over `analyze()`, not a separate service tier.
