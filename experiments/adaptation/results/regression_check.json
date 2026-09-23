@@ -1,0 +1,20 @@
+{
+  "base": {
+    "caption[bigearthnet_coast_finland]": "There are many green trees on the land.",
+    "vqa_water[bigearthnet_coast_finland]": "yes.",
+    "ground_water[bigearthnet_coast_finland]": "1 box(es) [[0, 0, 104, 120]]",
+    "caption[bigearthnet_river_austria]": "Some green trees and farmlands are on both sides of the river.",
+    "vqa_water[bigearthnet_river_austria]": "yes.",
+    "ground_water[bigearthnet_river_austria]": "1 box(es) [[3, 45, 120, 120]]",
+    "change": "mask_px=42545 text=<poly><2><438><0><202><9><203><23><333><146><312><157><312><166><341><419><297><430><378></poly>"
+  },
+  "adapted": {
+    "caption[bigearthnet_coast_finland]": "There are many trees in the forest.",
+    "vqa_water[bigearthnet_coast_finland]": "yes",
+    "ground_water[bigearthnet_coast_finland]": "1 box(es) [[0, 0, 104, 120]]",
+    "caption[bigearthnet_river_austria]": "There is a wide river in front of the farmland.",
+    "vqa_water[bigearthnet_river_austria]": "yes",
+    "ground_water[bigearthnet_river_austria]": "1 box(es) [[3, 45, 120, 120]]",
+    "change": "mask_px=42331 text=<poly><2><438><0><202><11><203><25><333><146><312><157><314><164><341><419><297><430><376></poly>"
+  }
+}

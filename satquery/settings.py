@@ -9,6 +9,7 @@ from pathlib import Path
 class Settings:
     vlm_backend: str = "fake"  # "falcon" (real model) or "fake" (deterministic, for tests/dev)
     falcon_model_id: str = "mehmetbayik/Falcon-Single-Instruction-Large"  # provenance: docs/decisions.md D-021
+    falcon_adapter: str = ""  # LoRA adapter path or HF repo id; empty means the unadapted base model (D-027)
     device: str = "auto"  # "auto", "cuda" or "cpu"
     num_beams: int = 3
     max_new_tokens: int = 1024
@@ -23,6 +24,7 @@ def load_settings() -> Settings:
     return Settings(
         vlm_backend=env("SATQUERY_VLM_BACKEND", defaults.vlm_backend),
         falcon_model_id=env("SATQUERY_FALCON_MODEL_ID", defaults.falcon_model_id),
+        falcon_adapter=env("SATQUERY_FALCON_ADAPTER", defaults.falcon_adapter),
         device=env("SATQUERY_DEVICE", defaults.device),
         num_beams=int(env("SATQUERY_NUM_BEAMS", defaults.num_beams)),
         max_new_tokens=int(env("SATQUERY_MAX_NEW_TOKENS", defaults.max_new_tokens)),

@@ -26,14 +26,16 @@ _VLM_CACHE_LOCK = threading.Lock()
 
 
 def get_vlm(settings: Settings) -> VLMBackend:
-    key = (settings.vlm_backend, settings.falcon_model_id, settings.device, settings.num_beams, settings.max_new_tokens)
+    key = (settings.vlm_backend, settings.falcon_model_id, settings.falcon_adapter, settings.device,
+           settings.num_beams, settings.max_new_tokens)
     with _VLM_CACHE_LOCK:
         if key not in _VLM_CACHE:
             if settings.vlm_backend == "fake":
                 _VLM_CACHE[key] = FakeVLM()
             elif settings.vlm_backend == "falcon":
                 from satquery.specialists.falcon import FalconVLM
-                _VLM_CACHE[key] = FalconVLM(settings.falcon_model_id, settings.device, settings.num_beams, settings.max_new_tokens)
+                _VLM_CACHE[key] = FalconVLM(settings.falcon_model_id, settings.device, settings.num_beams,
+                                            settings.max_new_tokens, settings.falcon_adapter)
             else:
                 raise ValueError(f"unknown SATQUERY_VLM_BACKEND '{settings.vlm_backend}' (use 'falcon' or 'fake')")
         return _VLM_CACHE[key]

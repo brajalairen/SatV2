@@ -71,8 +71,12 @@ def to_single_frame(polygons: list[list[float]], width: int, height: int) -> lis
 
 
 class FalconVLM:
-    def __init__(self, model_id: str, device: str = "auto", num_beams: int = 3, max_new_tokens: int = 1024):
-        self.model_id = model_id
+    def __init__(self, model_id: str, device: str = "auto", num_beams: int = 3, max_new_tokens: int = 1024,
+                 adapter: str = ""):
+        # With an adapter, model_id names both parts, so every execution trace shows what actually ran (D-027).
+        self.model_id = f"{model_id} + {adapter}" if adapter else model_id
+        self.base_model_id = model_id
+        self.adapter = adapter
         self.requested_device = device
         self.num_beams = num_beams
         self.max_new_tokens = max_new_tokens
@@ -102,10 +106,15 @@ class FalconVLM:
         if self.device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dtype = torch.float16 if self.device == "cuda" else torch.float32
-        local_path = snapshot_download(self.model_id)
+        local_path = snapshot_download(self.base_model_id)
         with patch("transformers.dynamic_module_utils.get_imports", without_flash_attn):
             model = AutoModelForCausalLM.from_pretrained(local_path, trust_remote_code=True, torch_dtype=self.dtype)
             self.processor = AutoProcessor.from_pretrained(local_path, trust_remote_code=True)
+        if self.adapter:
+            # peft is imported lazily, like torch: the app and its tests never need it unless an adapter is set.
+            from peft import PeftModel
+
+            model = PeftModel.from_pretrained(model, self.adapter)
         self.model = model.to(self.device).eval()
         return self
 

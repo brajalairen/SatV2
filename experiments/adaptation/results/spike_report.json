@@ -1,0 +1,81 @@
+{
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "torch": "2.8.0+cu128",
+    "cuda_build": "12.8",
+    "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "vram_total_gb": 6.439,
+    "vram_free_at_start_gb": 5.318,
+    "transformers": "4.49.0",
+    "peft": "0.17.1"
+  },
+  "load_seconds": 6.53,
+  "vram_after_load_gb": 1.699,
+  "architecture": {
+    "class": "FalconForConditionalGeneration",
+    "is_encoder_decoder": true,
+    "total_params_millions": 837.4,
+    "top_level_modules": [
+      "image_pos_embed",
+      "image_proj_norm",
+      "language_model",
+      "vision_tower",
+      "visual_temporal_embed"
+    ],
+    "linear_leaf_names": [
+      "fc1",
+      "fc2",
+      "k_proj",
+      "lm_head",
+      "out_proj",
+      "proj",
+      "q_proj",
+      "qkv",
+      "v_proj"
+    ],
+    "decoder_attn_linear_count": 96,
+    "decoder_attn_examples": [
+      "language_model.model.decoder.layers.0.self_attn.k_proj",
+      "language_model.model.decoder.layers.0.self_attn.v_proj",
+      "language_model.model.decoder.layers.0.self_attn.q_proj",
+      "language_model.model.decoder.layers.0.self_attn.out_proj",
+      "language_model.model.decoder.layers.0.encoder_attn.k_proj",
+      "language_model.model.decoder.layers.0.encoder_attn.v_proj"
+    ]
+  },
+  "lora": {
+    "r": 8,
+    "alpha": 16,
+    "dropout": 0.05,
+    "trainable_params": 1572864,
+    "trainable_pct": 0.1878,
+    "adapter_mb_fp16_estimate": 3.1
+  },
+  "training_step": {
+    "steps_run": 3,
+    "losses": [
+      11.4531,
+      11.0703,
+      10.6172
+    ],
+    "loss_is_finite": true,
+    "seconds_per_step": 0.862,
+    "peak_allocated_gb": 2.043,
+    "peak_reserved_gb": 2.093,
+    "vram_free_now_gb": 3.186
+  },
+  "gate": {
+    "threshold_gb": 5.2,
+    "measured_peak_reserved_gb": 2.093,
+    "passes_vram": true,
+    "passes_loss_finite": true,
+    "passes_peft_attached": true,
+    "verdict": "PASS"
+  },
+  "estimate": {
+    "samples": 6000,
+    "epochs": 1,
+    "hours_1_epoch": 1.44
+  }
+}

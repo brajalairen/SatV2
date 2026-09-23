@@ -11,6 +11,59 @@ In ~2 days we submit the **first-round** entry: a PPT, a demo video, and a **wor
 - **Rule:** a convincing, working end-to-end demo beats polish. Build the smallest version of the approved architecture that supports the demo and can be extended later.
 - **Tie-break:** when polishing an existing part competes with building a missing part the demo needs, build the missing part.
 
+## D-027 · SIH R5 adaptation is a LoRA fine-tune of Falcon on BigEarthNet.txt binary VQA (2026-09-21, executes docs/adaptation-plan.md)
+- **Why:** R5 is the one mandatory SIH item with no implementation. Falcon is remote-sensing pre-trained by its
+  authors, not by us (D-021), so it does not satisfy R5. LoRA on the *same* component the demo runs on means the
+  adapted model appears by name in every execution trace.
+- **Feasibility, measured on the RTX 4050 (not estimated):**
+
+  | Check | Result |
+  |---|---|
+  | Architecture | `FalconForConditionalGeneration`, `is_encoder_decoder=True`, DaViT + 12/12 enc-dec, 837.4 M params (confirms the Florence-2 assumption in the plan §3) |
+  | PEFT attaches | 96 decoder attention Linears (`self_attn` + `encoder_attn` q/k/v/out_proj); 1,572,864 trainable params (0.188%) |
+  | **Peak reserved VRAM** | **2.09 GB** of 6.44 GB, against a 5.2 GB gate — passes with ~3.2 GB spare |
+  | Overfit check | loss 4.46 -> 0.013 on 20 samples over 25 epochs: the label path and gradients work |
+  | Environment | torch 2.8.0+cu128, transformers **4.49.0 (pin held)**, peft 0.17.1, accelerate 1.10.1 |
+
+  **Train on the RTX 4050. Colab is not needed.** The processor always resizes to 768x768, so the 2.09 GB figure is
+  already at full resolution and gradient checkpointing is unnecessary.
+- **Three corrections to `docs/adaptation-plan.md`, forced by what is actually on this machine:**
+  1. **`metadata.parquet` does not exist here**, so the plan's `--split train --per-class 200` command
+     (`scripts/build_round1_subset.py`) cannot run. Patches are selected from **BigEarthNet.txt's own `split`
+     column**, stratified by question `category`. **Land-cover class balance is therefore not controlled**; say so.
+  2. The dataset root is **doubly nested** (`...\BigEarthNet-S1\BigEarthNet-S1`), defeating the script's path defaults.
+  3. `peft`/`accelerate` must be installed **`--no-deps`**, or they drag transformers past 4.50 and break Falcon's
+     remote code (D-021). Recorded as the `adaptation` extra in `pyproject.toml`.
+- **Scope:** `type == "binary"` rows only. Bounding-box rows need Falcon's `<bin>` coordinate grammar, a separate
+  and riskier target that could regress the working grounding path. Exclusion stated in the write-up.
+- **Dataset built 2026-09-21:** 7,360 train / 1,064 validation / 1,794 test rows; 2,000 / 300 / 500 patches;
+  **yes-rate exactly 0.500 on every split**; splits disjoint by `patch_id` (asserted, not assumed); zero rows
+  dropped for missing imagery. Source parquet SHA-256 recorded in the manifest.
+- **Integration:** `SATQUERY_FALCON_ADAPTER` (default empty). Set, `model_id` becomes `"<base> + <adapter>"` so every
+  trace names the adapted model; unset, behaviour is identical to today and `peft` is never imported. The adapter is
+  part of the VLM cache key, so switching it cannot silently return the wrong model.
+- **RESULT (2026-09-21, measured):** trained 27.4 min on 7,360 rows, peak VRAM 2.091 GB, adapter 6.3 MB
+  (SHA-256 `b7b1388f...36100`), validation loss 2.0671. Held-out exact-match on 1,794 rows from unseen patches:
+
+  | | Before | After | Change |
+  |---|---|---|---|
+  | **Overall** | 0.4972 | **0.6633** | **+16.61 pp** |
+  | presence (n=504) | 0.5496 | 0.7202 | +17.06 pp |
+  | count (n=482) | 0.4315 | 0.6411 | +20.96 pp |
+  | area (n=483) | 0.4638 | 0.6190 | +15.52 pp |
+  | adjacency (n=325) | 0.5631 | 0.6738 | +11.07 pp |
+
+  The test set is balanced (yes rate 0.500), so the 0.4972 baseline is chance. Predictions after are
+  1,015 yes / 779 no: **no answer collapse**. Every category improved.
+- **Regression check passed:** with the adapter on vs off, grounding boxes are identical, the change mask differs
+  by 0.5% (42,545 -> 42,331 px) with the same polygon, and captions stay coherent. Only binary VQA was trained,
+  and the untrained tasks did not degrade. Evidence: `experiments/adaptation/results/regression_check.json`.
+- **The demo default stays OFF.** Whether Round 1 runs with the adapter is decided *after* the before/after
+  evaluation and the 8-scenario regression check — evidence first (CLAUDE.md §7).
+- **Honesty limits:** this adapts to BigEarthNet Sentinel-2 at 120x120 px / 10 m. **No claim may be made that it
+  improves Cartosat-2S 0.65 m performance.** Evidence in `experiments/adaptation/results/`; adapter weights are not
+  committed (CLAUDE.md §11).
+
 ## D-026 · The bi-temporal change map compares both dates on one shared scale (2026-09-20, user decision, FINAL for R1)
 - **Was:** each date was stretched by its own 2–98 percentiles per band, then differenced
   (`raster_analysis.change_map`). Two dates were therefore measured against two different references.

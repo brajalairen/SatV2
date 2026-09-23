@@ -1,0 +1,112 @@
+{
+  "model_id": "mehmetbayik/Falcon-Single-Instruction-Large",
+  "adapter": null,
+  "split": "test",
+  "rows": 1794,
+  "num_beams": 3,
+  "exact_match": 0.4972,
+  "correct": 892,
+  "per_category": {
+    "adjacency": {
+      "n": 325,
+      "exact_match": 0.5631
+    },
+    "area": {
+      "n": 483,
+      "exact_match": 0.4638
+    },
+    "count": {
+      "n": 482,
+      "exact_match": 0.4315
+    },
+    "presence": {
+      "n": 504,
+      "exact_match": 0.5496
+    }
+  },
+  "reference_answer_distribution": {
+    "no": 897,
+    "yes": 897
+  },
+  "yes_base_rate": 0.5,
+  "prediction_distribution": {
+    "no": 1091,
+    "yes": 701,
+    "farmland": 1,
+    "forest": 1
+  },
+  "seconds": 362.8,
+  "seconds_per_row": 0.202,
+  "samples": [
+    {
+      "question": "Is any inland water directly touching marine waters in the image?",
+      "reference": "no",
+      "prediction": "no.",
+      "category": "adjacency",
+      "correct": true
+    },
+    {
+      "question": "Is there evidence of inland waters in the image?",
+      "reference": "no",
+      "prediction": "no.",
+      "category": "presence",
+      "correct": true
+    },
+    {
+      "question": "Would you say that coniferous forests occupy four or more continuous areas in the image?",
+      "reference": "no",
+      "prediction": "no.",
+      "category": "count",
+      "correct": true
+    },
+    {
+      "question": "Can you observe any arable land in the satellite image?",
+      "reference": "yes",
+      "prediction": "no.",
+      "category": "presence",
+      "correct": false
+    },
+    {
+      "question": "Do marine waters cover a maximum of 100% of the image?",
+      "reference": "yes",
+      "prediction": "yes.",
+      "category": "area",
+      "correct": true
+    },
+    {
+      "question": "Is any arable land and pastures adjoining regions in this scene?",
+      "reference": "no",
+      "prediction": "no.",
+      "category": "adjacency",
+      "correct": true
+    },
+    {
+      "question": "Do arable lands take up between 288000 sqm and 864000 sqm of the image?",
+      "reference": "yes",
+      "prediction": "yes.",
+      "category": "area",
+      "correct": true
+    },
+    {
+      "question": "Would you say the satellite image shows marine waters?",
+      "reference": "yes",
+      "prediction": "yes.",
+      "category": "presence",
+      "correct": true
+    },
+    {
+      "question": "Can you confirm that the image has exactly three contiguous areas of mixed forests?",
+      "reference": "no",
+      "prediction": "no.",
+      "category": "count",
+      "correct": true
+    },
+    {
+      "question": "Does the image show exactly two connected regions of coniferous forests?",
+      "reference": "no",
+      "prediction": "no.",
+      "category": "count",
+      "correct": true
+    }
+  ]
+}

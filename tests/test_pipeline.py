@@ -251,3 +251,42 @@ def test_a_long_caption_request_is_not_limited(settings, write_tiff, optical_sce
     response = run(settings, "Describe the land-cover of this image. " + "Include every detail you can. " * 12,
                    (path, "optical", None))
     assert response.status == "ok" and response.task == "caption"
+
+
+def test_falcon_adapter_setting_defaults_to_the_unadapted_base_model(monkeypatch):
+    """Unset SATQUERY_FALCON_ADAPTER must leave model_id and the download target untouched (D-027)."""
+    from satquery.settings import load_settings
+    from satquery.specialists.falcon import FalconVLM
+
+    monkeypatch.delenv("SATQUERY_FALCON_ADAPTER", raising=False)
+    assert load_settings().falcon_adapter == ""
+
+    vlm = FalconVLM("base/model")
+    assert vlm.model_id == "base/model"
+    assert vlm.base_model_id == "base/model" and vlm.adapter == ""
+
+
+def test_falcon_adapter_is_named_in_the_model_id(monkeypatch):
+    """With an adapter set, every execution trace must name both parts: that is what demonstrates R5."""
+    from satquery.settings import load_settings
+    from satquery.specialists.falcon import FalconVLM
+
+    monkeypatch.setenv("SATQUERY_FALCON_ADAPTER", "runs/adapter")
+    assert load_settings().falcon_adapter == "runs/adapter"
+
+    vlm = FalconVLM("base/model", adapter="runs/adapter")
+    assert vlm.model_id == "base/model + runs/adapter"
+    # weights still come from the base repo; the adapter is applied on top
+    assert vlm.base_model_id == "base/model"
+
+
+def test_changing_the_adapter_does_not_reuse_the_cached_backend(monkeypatch):
+    """The adapter is part of the cache key, or switching it would silently return the wrong model."""
+    from satquery import api
+
+    monkeypatch.setattr(api, "_VLM_CACHE", {})
+    plain = api.get_vlm(Settings(vlm_backend="fake", falcon_adapter=""))
+    adapted = api.get_vlm(Settings(vlm_backend="fake", falcon_adapter="runs/adapter"))
+
+    assert plain is not adapted
+    assert api.get_vlm(Settings(vlm_backend="fake", falcon_adapter="")) is plain

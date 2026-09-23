@@ -1,0 +1,66 @@
+{
+  "dataset": "BigEarthNet.txt (BIFOLD-BigEarthNetv2-0), CDLA-Permissive-1.0",
+  "parquet": "D:\\Hackathon\\satquery remote sensing\\SatQuery\\BigEarthNet.txt\\BigEarthNet.txt.parquet",
+  "parquet_sha256": "d3b97f999456016bb13c2a8e94b8f47825654f07a0394a6b266a38b750ca1554",
+  "image_source": "BigEarthNet v2.0 S2 L2A, bands B04/B03/B02",
+  "render": "satquery.imaging.load_image -> render_rgb (one shared 2-98 percentile stretch)",
+  "row_type_filter": "binary",
+  "selection": "stratified by category from BigEarthNet.txt `split`; metadata.parquet unavailable, so land-cover class balance is NOT controlled",
+  "yes_no": "balanced per split by downsampling the majority answer",
+  "seed": 7,
+  "rows_per_patch_cap": 4,
+  "splits": {
+    "train": {
+      "rows": 7360,
+      "patches": 2000,
+      "skipped_rows_missing_imagery": 0,
+      "answers": {
+        "no": 3680,
+        "yes": 3680
+      },
+      "yes_base_rate": 0.5,
+      "by_category": {
+        "adjacency": 1444,
+        "presence": 1992,
+        "area": 2001,
+        "count": 1923
+      },
+      "jsonl": "train.jsonl"
+    },
+    "validation": {
+      "rows": 1064,
+      "patches": 300,
+      "skipped_rows_missing_imagery": 0,
+      "answers": {
+        "no": 532,
+        "yes": 532
+      },
+      "yes_base_rate": 0.5,
+      "by_category": {
+        "area": 276,
+        "count": 285,
+        "presence": 294,
+        "adjacency": 209
+      },
+      "jsonl": "validation.jsonl"
+    },
+    "test": {
+      "rows": 1794,
+      "patches": 500,
+      "skipped_rows_missing_imagery": 0,
+      "answers": {
+        "no": 897,
+        "yes": 897
+      },
+      "yes_base_rate": 0.5,
+      "by_category": {
+        "adjacency": 325,
+        "presence": 504,
+        "count": 482,
+        "area": 483
+      },
+      "jsonl": "test.jsonl"
+    }
+  },
+  "splits_disjoint_by_patch_id": true
+}
