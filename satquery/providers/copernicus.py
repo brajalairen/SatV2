@@ -1,6 +1,7 @@
 """Sentinel-2 L2A retrieval from the Copernicus Data Space Ecosystem (Sentinel Hub APIs).
 
-Scope, deliberately small (MVP): Sentinel-2, Level-2A, optical, one date, rectangle AOI. This is an
+Scope, deliberately small (MVP): Sentinel-2, Level-2A, optical, rectangle AOI; one date, or two
+dates for a question about change over time (see providers/temporal.py). This is an
 acquisition layer only -- it obtains a GeoTIFF and its provenance, then the existing SatQuery
 pipeline does the analysis.
 
@@ -20,16 +21,22 @@ import json
 import math
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from satquery.providers import RetrievedScene, SceneMetadata
+from satquery.providers.temporal import TemporalWindows
 from satquery.providers.errors import (
     AreaInvalid,
     AreaTooLarge,
     AuthenticationFailed,
     CredentialsMissing,
+    GridsIncompatible,
+    NoEarlierImagery,
     NoImageryFound,
+    NoLaterImagery,
+    OnlyOneAcquisition,
     ProcessingFailed,
     ProviderTimeout,
     RasterUnreadable,
@@ -222,15 +229,19 @@ class CopernicusSentinelProvider:
                 "limit for a single request. Draw a smaller rectangle.")
 
     def search(self, bbox: tuple[float, float, float, float], *, days_back: int | None = None,
-               max_cloud: float | None = None, limit: int = 50) -> list[dict]:
-        """Catalogue scenes covering the area, newest window first."""
-        days = self.days_back if days_back is None else days_back
+               max_cloud: float | None = None, limit: int = 50,
+               start: date | None = None, end: date | None = None) -> list[dict]:
+        """Catalogue scenes covering the area: the last `days_back` days, or the dates start..end inclusive."""
         cloud = self.max_cloud if max_cloud is None else max_cloud
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=days)
+        if start is not None and end is not None:
+            window = f"{start:%Y-%m-%d}T00:00:00Z/{end:%Y-%m-%d}T23:59:59Z"
+        else:
+            days = self.days_back if days_back is None else days_back
+            now = datetime.now(timezone.utc)
+            window = f"{(now - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')}/{now.strftime('%Y-%m-%dT%H:%M:%SZ')}"
         payload = {
             "bbox": list(bbox),
-            "datetime": f"{start.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            "datetime": window,
             "collections": [COLLECTION],
             "limit": limit,
             # The property name must be quoted: an unquoted `eo:cloud_cover < N` is accepted with
@@ -319,6 +330,10 @@ class CopernicusSentinelProvider:
 
         features = self.search(bbox, days_back=days_back, max_cloud=max_cloud)
         scene = self.select_scene(features)
+        return self._download(bbox, bands, scene, destination, alternatives=len(features))
+
+    def _download(self, bbox, bands: list[str], scene: dict, destination: Path, *, alternatives: int) -> RetrievedScene:
+        """Fetch one catalogue scene for the area, write it as a GeoTIFF, and describe where it came from."""
         properties = scene.get("properties", {})
         acquired_datetime = str(properties.get("datetime", ""))
         acquired = acquired_datetime[:10]
@@ -338,9 +353,97 @@ class CopernicusSentinelProvider:
             bbox_wgs84=bbox, crs="EPSG:4326", resolution_m=self.resolution_m,
             bands=[f"{b} ({BAND_ROLE.get(b, b)})" for b in bands],
             width=width, height=height, scene_id=scene.get("id"),
-            alternatives_considered=len(features),
+            alternatives_considered=alternatives,
         )
         return RetrievedScene(path=destination, metadata=metadata)
+
+    # ----------------------------------------------------------------- two dates
+
+    @staticmethod
+    def select_pair(before_features: list[dict], after_features: list[dict],
+                    max_cloud: float | None = None) -> tuple[dict, dict]:
+        """One scene from each window: two different acquisition dates, earlier before later.
+
+        Policy: cloud cover counts in 5-point steps, so 0.01% and 0.3% are equally clear; among
+        equally clear pairs the one furthest apart in time wins. A scene is never used twice, and two
+        tiles of the same pass (same day) count as one acquisition.
+        """
+        def candidates(features: list[dict]) -> dict[str, dict]:
+            by_day: dict[str, dict] = {}
+            for feature in features:
+                properties = feature.get("properties", {})
+                day = str(properties.get("datetime", ""))[:10]
+                cloud = properties.get("eo:cloud_cover")
+                if not day or not isinstance(cloud, (int, float)):
+                    continue
+                if max_cloud is not None and cloud >= max_cloud:
+                    continue  # the catalogue filters this already; checked again so the rule cannot drift
+                if day not in by_day or cloud < by_day[day]["properties"]["eo:cloud_cover"]:
+                    by_day[day] = feature
+            return by_day
+
+        before, after = candidates(before_features), candidates(after_features)
+        if not before and not after:
+            raise NoImageryFound(
+                "No Sentinel-2 L2A scene under the cloud limit was found for this area in either period, so a "
+                "temporal comparison cannot be performed. Try a longer period, a higher cloud limit, or another area.")
+        if not before:
+            raise NoEarlierImagery(
+                "No suitable Sentinel-2 L2A scene was found for this area in the earlier period, so the earlier date "
+                "could not be retrieved. Try an earlier or longer period, or a higher cloud limit.")
+        if not after:
+            raise NoLaterImagery(
+                "No suitable Sentinel-2 L2A scene was found for this area in the later period, so the later date "
+                "could not be retrieved. Try a longer period, or a higher cloud limit.")
+
+        def step(feature: dict) -> int:
+            return math.ceil(float(feature["properties"]["eo:cloud_cover"]) / 5)
+
+        pairs = [(b_day, a_day) for b_day in before for a_day in after if b_day < a_day]
+        if not pairs:
+            raise OnlyOneAcquisition(
+                "Only one suitable Sentinel-2 acquisition was found for this area and time window, so a temporal "
+                "comparison cannot be performed. Name two periods further apart, or a longer period.")
+        b_day, a_day = min(pairs, key=lambda p: (step(before[p[0]]) + step(after[p[1]]),
+                                                 -(date.fromisoformat(p[1]) - date.fromisoformat(p[0])).days))
+        return before[b_day], after[a_day]
+
+    def pair_cache_key(self, bbox, bands: list[str], windows: TemporalWindows, *, max_cloud: float | None = None) -> str:
+        """Identity of a two-date request. "mode" keeps it apart from every single-date key."""
+        material = json.dumps({
+            "mode": "temporal",
+            "bbox": [round(float(v), 6) for v in bbox],
+            "collection": COLLECTION,
+            "before_window": [windows.before.start.isoformat(), windows.before.end.isoformat()],
+            "after_window": [windows.after.start.isoformat(), windows.after.end.isoformat()],
+            "max_cloud": self.max_cloud if max_cloud is None else max_cloud,
+            "resolution_m": self.resolution_m,
+            "bands": list(bands),
+        }, sort_keys=True)
+        return hashlib.sha256(material.encode()).hexdigest()[:16]
+
+    def retrieve_pair(self, bbox_wgs84, bands: list[str], windows: TemporalWindows, destination_dir: Path, *,
+                      max_cloud: float | None = None) -> tuple[RetrievedScene, RetrievedScene]:
+        """Two real acquisitions of the same area, earlier first, on one pixel grid.
+
+        Both are requested for the same bounds and output size, so they share a grid by construction;
+        that is still verified on the files, and a mismatch stops the comparison rather than resampling.
+        """
+        bbox = tuple(float(v) for v in bbox_wgs84)
+        self.validate_area(bbox)
+        cloud = self.max_cloud if max_cloud is None else max_cloud
+        before_features = self.search(bbox, start=windows.before.start, end=windows.before.end, max_cloud=cloud)
+        after_features = self.search(bbox, start=windows.after.start, end=windows.after.end, max_cloud=cloud)
+        before_scene, after_scene = self.select_pair(before_features, after_features, cloud)
+
+        jobs = [(before_scene, destination_dir / "before.tif", len(before_features)),
+                (after_scene, destination_dir / "after.tif", len(after_features))]
+        # The two downloads are independent, so they run side by side rather than one after the other.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(self._download, bbox, bands, scene, path, alternatives=n) for scene, path, n in jobs]
+            before, after = (future.result() for future in futures)
+        check_same_grid(before.path, after.path)
+        return before, after
 
     @staticmethod
     def _label_bands(path: Path, bands: list[str]) -> tuple[int, int]:
@@ -373,3 +476,29 @@ def _negated_timestamp(value: str) -> float:
         return -datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
     except (ValueError, AttributeError):
         return 0.0
+
+
+def check_same_grid(first: Path, second: Path) -> None:
+    """Raise GridsIncompatible unless both rasters share size, CRS, transform and band count."""
+    import rasterio
+
+    try:
+        with rasterio.open(first) as a, rasterio.open(second) as b:
+            grids = [(r.width, r.height, r.count, r.crs.to_string() if r.crs else None, tuple(r.transform)[:6])
+                     for r in (a, b)]
+    except Exception as error:
+        raise RasterUnreadable("One of the two retrieved rasters could not be read as a GeoTIFF.") from error
+    (w1, h1, n1, crs1, t1), (w2, h2, n2, crs2, t2) = grids
+    problems = []
+    if (w1, h1) != (w2, h2):
+        problems.append(f"size {w1}x{h1} vs {w2}x{h2}")
+    if n1 != n2:
+        problems.append(f"{n1} vs {n2} bands")
+    if crs1 != crs2:
+        problems.append(f"CRS {crs1} vs {crs2}")
+    if any(abs(x - y) > 1e-9 for x, y in zip(t1, t2)):
+        problems.append("different georeferencing")
+    if problems:
+        raise GridsIncompatible(
+            "The two retrieved scenes do not share a pixel grid (" + "; ".join(problems) + "), so no pixel-wise "
+            "change analysis was run. They are not resampled onto each other silently.")

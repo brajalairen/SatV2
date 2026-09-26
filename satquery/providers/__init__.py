@@ -32,6 +32,9 @@ class SceneMetadata:
     attribution: str = "Contains modified Copernicus Sentinel data"
     cached: bool = False
     alternatives_considered: int = 0  # how many scenes the search returned before selection
+    # How the raster was produced, so the provenance says exactly what was analysed.
+    processing: str = ("Sentinel Hub Process API: the selected day only (no multi-date mosaic), least-cloud "
+                       "tile order, bands as FLOAT32 surface reflectance, resampled to the requested grid")
 
     def as_dict(self) -> dict:
         from dataclasses import asdict

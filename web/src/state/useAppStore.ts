@@ -4,6 +4,7 @@
 import { create } from "zustand";
 import { api, ApiError } from "./api";
 import type { AnalyzeResult, Modality, OverlayLayer, SceneMetadata, TaskType, UploadInfo } from "./types";
+import { isBasemapId, type BasemapId } from "../map/basemap";
 
 /** Area-enclosing shapes only: a point cannot restrict an analysis (D-025). */
 export type DrawMode = "rectangle" | "polygon" | "circle" | null;
@@ -13,6 +14,9 @@ export type SidebarSection = "search" | "select" | "layers" | "saved" | "help" |
 export interface Layer extends UploadInfo {
   visible: boolean;
   opacity: number;
+  /** Retrieved for the drawn area rather than added by the user. It never blocks a new retrieval:
+   *  the next question may need a different date, or two dates. */
+  fetched?: boolean;
 }
 
 export interface SavedArea {
@@ -29,12 +33,17 @@ export interface Aoi {
 }
 
 /** What the app is doing while `pending` is true, so the user sees the real step, not one spinner. */
-export type ProgressStage = "searching" | "preparing" | "analysing";
+export type ProgressStage = "searching" | "preparing" | "comparing" | "analysing" | "analysing-change";
 
+/** Each label names a step that is really running. The earlier and later scenes of a comparison are
+ *  found and downloaded together inside one server request, so they share one honest label rather
+ *  than two that would have to be timed to look sequential. */
 export const PROGRESS_LABELS: Record<ProgressStage, string> = {
   searching: "Finding suitable satellite imagery",
   preparing: "Preparing Sentinel-2 imagery",
+  comparing: "Preparing imagery for comparison",
   analysing: "Analysing the selected area",
+  "analysing-change": "Analysing changes",
 };
 
 interface AppState {
@@ -50,8 +59,9 @@ interface AppState {
   stage: ProgressStage | null;
   result: AnalyzeResult | null;
   error: string | null;
-  /** Provenance of the scene retrieved for this result, when imagery was fetched rather than uploaded. */
-  scene: SceneMetadata | null;
+  /** Provenance of the scenes retrieved for this result, oldest first: one, or two for a comparison.
+   *  Empty when the imagery was the user's own. */
+  scenes: SceneMetadata[];
   /** Overlays the user has switched off; a result may carry several. */
   hiddenOverlays: Set<string>;
 
@@ -62,10 +72,14 @@ interface AppState {
   pendingQuery: string | null;
   detailsOpen: boolean;
   theme: "light" | "dark";
+  /** How the map looks. Display only: it never changes what is analysed. */
+  basemap: BasemapId;
   modelIsFake: boolean | null;
 
   // --- actions
   addLayers: (uploads: UploadInfo[]) => void;
+  /** Put retrieved scenes on the map, replacing any from an earlier retrieval. */
+  setFetchedLayers: (uploads: UploadInfo[]) => void;
   removeLayer: (id: string) => void;
   updateLayer: (id: string, patch: Partial<Pick<Layer, "visible" | "opacity" | "modality" | "acquired">>) => void;
   reorderLayer: (id: string, direction: -1 | 1) => void;
@@ -86,12 +100,14 @@ interface AppState {
   setPendingQuery: (query: string | null) => void;
   setDetailsOpen: (open: boolean) => void;
   toggleTheme: () => void;
+  setBasemap: (basemap: BasemapId) => void;
   setModelIsFake: (value: boolean) => void;
   setError: (message: string | null) => void;
 }
 
 const SAVED_AREAS_KEY = "satquery.savedAreas";
 const THEME_KEY = "satquery.theme";
+const BASEMAP_KEY = "satquery.basemap";
 
 /** Longest wait for one analysis. A real model on CPU takes about a minute for the longest plans.
  *  Retrieval runs inside the same budget, and a cold Copernicus scene can take minutes to prepare. */
@@ -123,6 +139,17 @@ function writeSavedAreas(areas: SavedArea[]): void {
   } catch {
     /* private mode or blocked storage: the areas simply do not persist */
   }
+}
+
+/** The basemap this browser last chose. Anything not offered (an old value, a tampered one) is ignored. */
+export function readBasemap(): BasemapId {
+  try {
+    const stored = localStorage.getItem(BASEMAP_KEY);
+    if (isBasemapId(stored)) return stored;
+  } catch {
+    /* blocked storage: fall through to the default */
+  }
+  return "standard";
 }
 
 function readTheme(): "light" | "dark" {
@@ -188,6 +215,23 @@ export function selectAnalysisImages(layers: Layer[]): Layer[] {
   return chosen;
 }
 
+export type AnalysisSource = { kind: "images"; images: Layer[] } | { kind: "fetch" } | { kind: "none" };
+
+/**
+ * What the next question runs on. Imagery the user added always wins. A scene retrieved earlier for
+ * the drawn rectangle does not: the next question may need a different date, or two dates, so it is
+ * retrieved afresh, and the server's cache makes a repeat fast. Retrieved scenes are analysed directly
+ * only when there is no rectangle left to retrieve for.
+ */
+export function nextAnalysisSource(layers: Layer[], aoi: Aoi | null): AnalysisSource {
+  const own = selectAnalysisImages(layers.filter((layer) => !layer.fetched));
+  if (own.length) return { kind: "images", images: own };
+  if (isRectangle(aoi)) return { kind: "fetch" };
+  const fetched = selectAnalysisImages(layers.filter((layer) => layer.fetched));
+  if (fetched.length) return { kind: "images", images: fetched };
+  return { kind: "none" };
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   layers: [],
   aoi: null,
@@ -197,7 +241,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   pending: false,
   stage: null,
   result: null,
-  scene: null,
+  scenes: [],
   error: null,
   hiddenOverlays: new Set(),
 
@@ -206,11 +250,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingQuery: null,
   detailsOpen: false,
   theme: readTheme(),
+  basemap: readBasemap(),
   modelIsFake: null,
 
   addLayers: (uploads) =>
     set((state) => ({
       layers: [...state.layers, ...uploads.map((u) => ({ ...u, visible: true, opacity: 1 }))].slice(-8),
+      error: null,
+    })),
+
+  setFetchedLayers: (uploads) =>
+    set((state) => ({
+      layers: [
+        ...state.layers.filter((layer) => !layer.fetched),
+        ...uploads.map((u) => ({ ...u, visible: true, opacity: 1, fetched: true })),
+      ].slice(-8),
       error: null,
     })),
 
@@ -264,19 +318,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   runAnalysis: async (query, forcedTask) => {
     const { layers, aoi } = get();
-    const uploaded = selectAnalysisImages(layers);
+    const source = nextAnalysisSource(layers, aoi);
 
-    // Uploaded or preloaded imagery always wins: the fallback path is untouched by retrieval.
-    // Only when there is nothing loaded does a drawn area fetch imagery for itself.
-    if (!uploaded.length && !aoi) {
-      set({ error: "Add an image first, or select an area on the map, then ask a question about it." });
-      return;
-    }
-    if (!uploaded.length && aoi && !isRectangle(aoi)) {
+    // The user's own imagery always wins: that path is untouched by retrieval. Otherwise a drawn
+    // rectangle retrieves imagery for itself, one scene or two depending on the question.
+    if (source.kind === "none") {
       set({
-        error:
-          "Fetching imagery currently supports rectangles only. Draw a rectangle over this area, " +
-          "or add a GeoTIFF covering the shape you drew.",
+        error: aoi
+          ? "Fetching imagery currently supports rectangles only. Draw a rectangle over this area, " +
+            "or add a GeoTIFF covering the shape you drew."
+          : "Add an image first, or select an area on the map, then ask a question about it.",
       });
       return;
     }
@@ -284,13 +335,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const controller = new AbortController();
     inflight = controller;
     const timer = setTimeout(() => controller.abort("timeout"), ANALYSIS_TIMEOUT_MS);
-    const retrieving = !uploaded.length;
+    const retrieving = source.kind === "fetch";
     set({
       pending: true,
       stage: retrieving ? "searching" : "analysing",
       error: null,
       result: null,
-      scene: null,
+      scenes: [],
       detailsOpen: false,
       hiddenOverlays: new Set(),
     });
@@ -298,28 +349,37 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Which step failed decides the message the user sees, so the two are never conflated.
     let stage: ProgressStage = retrieving ? "searching" : "analysing";
     try {
-      let images = uploaded.map((l) => ({ upload_id: l.id, modality: l.modality, acquired: l.acquired }));
-      let scene: SceneMetadata | null = null;
+      const own = source.kind === "images" ? source.images : [];
+      let images = own.map((l) => ({ upload_id: l.id, modality: l.modality, acquired: l.acquired }));
+      let scenes: SceneMetadata[] = [];
+      let comparing = false;
 
       if (retrieving && aoi) {
-        // All retrieval logic lives on the server; this only carries the request across.
+        // All retrieval logic lives on the server, including whether the question needs one date or
+        // two; this only carries the request across.
         const fetched = await api.fetchImagery(query, aoi.bounds, { signal: controller.signal });
         if (controller.signal.aborted) return;
 
-        stage = "preparing";
+        comparing = fetched.mode === "temporal";
+        stage = comparing ? "comparing" : "preparing";
         set({ stage });
-        scene = fetched.metadata;
-        images = [{ upload_id: fetched.upload.id, modality: fetched.upload.modality, acquired: fetched.upload.acquired }];
-        // The retrieved raster joins the map like any other layer, beside the basemap, not as it.
-        get().addLayers([fetched.upload]);
+        // Oldest first: the existing bi-temporal analysis reads image 1 as "before", image 2 as "after".
+        scenes = fetched.images.map((scene) => scene.metadata);
+        images = fetched.images.map(({ upload }) => ({
+          upload_id: upload.id,
+          modality: upload.modality,
+          acquired: upload.acquired,
+        }));
+        // Retrieved rasters join the map like any other layer, beside the basemap, not as it.
+        get().setFetchedLayers(fetched.images.map((scene) => scene.upload));
         // Yield so this stage actually paints. React batches state set in one synchronous block, so
-        // without a turn of the event loop "Preparing Sentinel-2 imagery" is replaced by "Analysing"
+        // without a turn of the event loop the preparing step is replaced by the analysis step
         // before the browser ever renders it, and the user sees the step skipped.
         await new Promise((resolve) => setTimeout(resolve, MIN_STAGE_PAINT_MS));
         if (controller.signal.aborted) return;
       }
 
-      stage = "analysing";
+      stage = comparing ? "analysing-change" : "analysing";
       set({ stage });
       const result = await api.analyze(
         query,
@@ -331,8 +391,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           ? { forcedTask, signal: controller.signal }
           : { aoiBbox: aoi?.bounds ?? null, aoiGeometry: areaGeometry(aoi), forcedTask, signal: controller.signal },
       );
-      set({ result, scene, pending: false, stage: null });
+      set({ result, scenes, pending: false, stage: null });
     } catch (error) {
+      const analysing = stage === "analysing" || stage === "analysing-change";
       const message = controller.signal.aborted
         ? controller.signal.reason === "timeout"
           ? TIMED_OUT
@@ -340,10 +401,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         : error instanceof ApiError
           ? // The server explains retrieval failures in terms a user can act on ("no scene under
             // the cloud limit", "the area is too large"), so its wording is kept verbatim.
-            stage === "analysing"
+            analysing
             ? error.message
             : `Could not get imagery for this area. ${error.message}`
-          : stage === "analysing"
+          : analysing
             ? "The analysis failed unexpectedly."
             : "Could not get imagery for this area.";
       set({ error: message, pending: false, stage: null });
@@ -356,7 +417,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   cancelAnalysis: () => inflight?.abort("cancelled"),
 
   clearResult: () =>
-    set({ result: null, scene: null, detailsOpen: false, error: null, hiddenOverlays: new Set() }),
+    set({ result: null, scenes: [], detailsOpen: false, error: null, hiddenOverlays: new Set() }),
 
   toggleOverlay: (url) =>
     set((state) => {
@@ -384,6 +445,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       applyTheme(theme);
       return { theme };
     }),
+
+  // Sets the basemap and nothing else. The drawn area, the layers, the question and any result are
+  // untouched, and no request is made: MapView re-adds every overlay once the new style has loaded.
+  setBasemap: (basemap) => {
+    try {
+      localStorage.setItem(BASEMAP_KEY, basemap);
+    } catch {
+      /* private mode or blocked storage: the choice simply does not persist */
+    }
+    set({ basemap });
+  },
 
   setModelIsFake: (modelIsFake) => set({ modelIsFake }),
 

@@ -159,21 +159,55 @@ class AnalyzeResult(BaseModel):
 class FetchImageryRequest(BaseModel):
     """Retrieve imagery for a drawn area so the user need not upload a GeoTIFF.
 
-    The query is carried so the band set can suit the question and so a query needing two dates is
-    refused before any API call rather than answered from a single scene.
+    The query is carried so the band set can suit the question, and so a question about change over
+    time retrieves two real acquisitions instead of being answered from a single scene.
     """
 
     query: str = Field(min_length=1, max_length=2000)
     aoi_bbox: tuple[float, float, float, float]  # west, south, east, north
-    days_back: int | None = Field(default=None, ge=1, le=365)
+    days_back: int | None = Field(default=None, ge=1, le=365)  # single-date search window only
     max_cloud: float | None = Field(default=None, ge=0, le=100)
 
 
-class FetchImageryResult(BaseModel):
-    """A retrieved scene, registered as an ordinary upload the existing pipeline can analyse."""
+class FetchedScene(BaseModel):
+    """One retrieved scene, registered as an upload. `role` places it in a comparison."""
 
+    role: Literal["single", "before", "after"]
+    upload: UploadInfo
+    metadata: dict  # SceneMetadata: provider, satellite, date, cloud cover, bands, CRS, processing, ...
+
+
+class ComparisonWindow(BaseModel):
+    """A period searched for one of the two scenes. Never an acquisition date: see the scene metadata."""
+
+    start: str
+    end: str
+    label: str
+
+
+class TemporalInfo(BaseModel):
+    """How the two dates of a comparison were chosen (policy: satquery/providers/temporal.py)."""
+
+    basis: str
+    explanation: str
+    before_window: ComparisonWindow
+    after_window: ComparisonWindow
+    days_apart: int  # between the two acquisitions actually retrieved
+
+
+class FetchImageryResult(BaseModel):
+    """Retrieved imagery, registered as ordinary uploads the existing pipeline can analyse.
+
+    `mode` is "single" for one scene and "temporal" for a question about change over time. `images`
+    lists every scene retrieved, oldest first. `upload` and `metadata` are the most recent scene, as
+    they were before two-date retrieval existed, so a single-date client reads them unchanged.
+    """
+
+    mode: Literal["single", "temporal"] = "single"
     upload: UploadInfo
     metadata: dict  # SceneMetadata: provider, satellite, date, cloud cover, bands, CRS, ...
+    images: list[FetchedScene] = Field(default_factory=list)
+    temporal: TemporalInfo | None = None
     cached: bool = False
 
 
@@ -419,24 +453,13 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
 
         Deliberately separate from /api/analyze: retrieval failures stay distinguishable from
         analysis failures, and the client can show real progress between the two steps. The result
-        is an ordinary upload id, so the analysis path below is completely unchanged.
+        is one or two ordinary upload ids, so the analysis path below is completely unchanged: two
+        dated uploads are exactly what its existing bi-temporal change analysis takes.
         """
         from satquery.providers.copernicus import CopernicusSentinelProvider, bands_for_target
-        from satquery.providers.errors import QueryNeedsMultipleDates, RetrievalError
+        from satquery.providers.errors import RetrievalError
 
         current = load_settings()
-
-        # Refuse before spending a request: one scene can never answer a two-date question.
-        # COMPATIBLE_TASKS allows change_analysis only for pair_bitemporal, so this is a structural
-        # limit, not a policy choice (CLAUDE.md section 7: never fake an answer).
-        phrase = needs_multiple_dates(request.query)
-        if phrase:
-            problem = QueryNeedsMultipleDates(
-                f'"{phrase}" asks about change over time, which needs at least two acquisition '
-                "dates. This build retrieves a single, most recent scene. Upload two dated GeoTIFFs "
-                "of the same area to run a bi-temporal change analysis.")
-            return JSONResponse(status_code=problem.status, content=problem.as_payload())
-
         try:
             provider = CopernicusSentinelProvider(
                 current.copernicus_client_id, current.copernicus_client_secret,
@@ -446,6 +469,11 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
 
             target, _ = find_target(request.query)
             bands = bands_for_target(target)
+            # One scene can never answer a question about change over time, so such a question gets
+            # two real acquisitions of the same area. Never one scene used twice (CLAUDE.md section 7).
+            if needs_multiple_dates(request.query):
+                return fetch_pair(provider, request, bands, current)
+
             key = provider.cache_key(request.aoi_bbox, bands, days_back=request.days_back,
                                      max_cloud=request.max_cloud)
             cache_folder = current.runs_dir / "imagery-cache" / key
@@ -464,8 +492,52 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
 
         name = f"Sentinel-2 L2A {metadata.get('acquired', '')}".strip()
         upload = _register(store, scene_path, name, "optical", metadata.get("acquired"), current)
-        return FetchImageryResult(upload=upload, metadata=metadata,
+        return FetchImageryResult(mode="single", upload=upload, metadata=metadata,
+                                  images=[FetchedScene(role="single", upload=upload, metadata=metadata)],
                                   cached=bool(metadata.get("cached")))
+
+    def fetch_pair(provider, request: FetchImageryRequest, bands: list[str], current: Settings) -> FetchImageryResult:
+        """Two real acquisitions for a temporal question, registered oldest first.
+
+        Cached under a key that includes the mode and both search windows, so a single-date entry can
+        never be returned for a temporal request, nor one comparison for another.
+        """
+        from datetime import date
+
+        from satquery.providers.temporal import resolve_windows
+
+        windows = resolve_windows(request.query)  # TemporalRangeUnsupported before any API call
+        folder = current.runs_dir / "imagery-cache" / provider.pair_cache_key(
+            request.aoi_bbox, bands, windows, max_cloud=request.max_cloud)
+        paths = {"before": folder / "before.tif", "after": folder / "after.tif"}
+        record = folder / "pair.json"
+
+        cached = record.is_file() and all(path.is_file() for path in paths.values())
+        if cached:
+            metadata = json.loads(record.read_text(encoding="utf-8"))
+        else:
+            before, after = provider.retrieve_pair(request.aoi_bbox, bands, windows, folder,
+                                                   max_cloud=request.max_cloud)
+            metadata = {"before": before.metadata.as_dict(), "after": after.metadata.as_dict()}
+            # Written only after both downloads succeeded and share a grid: a failed or mismatched
+            # pair is never served from the cache.
+            record.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+        scenes = []
+        for role in ("before", "after"):
+            meta = metadata[role] | {"cached": cached}
+            upload = _register(store, paths[role], f"Sentinel-2 L2A {meta['acquired']} ({role})", "optical",
+                               meta["acquired"], current)
+            scenes.append(FetchedScene(role=role, upload=upload, metadata=meta))
+
+        days_apart = (date.fromisoformat(metadata["after"]["acquired"])
+                      - date.fromisoformat(metadata["before"]["acquired"])).days
+        window = lambda w: ComparisonWindow(start=w.start.isoformat(), end=w.end.isoformat(), label=w.label)
+        temporal = TemporalInfo(basis=windows.basis, explanation=windows.explanation,
+                                before_window=window(windows.before), after_window=window(windows.after),
+                                days_apart=days_apart)
+        return FetchImageryResult(mode="temporal", upload=scenes[-1].upload, metadata=scenes[-1].metadata,
+                                  images=scenes, temporal=temporal, cached=cached)
 
     @app.get("/api/uploads/{upload_id}/preview.png")
     def upload_preview(upload_id: str) -> FileResponse:

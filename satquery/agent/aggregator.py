@@ -120,13 +120,16 @@ def _change(intent, r, ctx, run_dir):
         return "", None, []
     before, after = ctx.images
     period = f"Between {before.acquired} and {after.acquired}, " if before.acquired and after.acquired else ""
-    answer = (f"{period}{_pct(primary.outputs['fraction'])} of the scene changed "
-              f"({'VLM change detection' if vlm_step else 'deterministic change map'}), mainly in the "
+    # Each figure is attributed to what produced it: the VLM's interpretation, or the deterministic
+    # map, which is a heuristic on pixel differences and not a land-cover classification.
+    source = "VLM change detection" if vlm_step else "the deterministic change map (heuristic pixel differencing)"
+    answer = (f"{period}{source} flags {_pct(primary.outputs['fraction'])} of the scene as changed, mainly in the "
               f"{_places(primary.outputs['regions'])}.")
     confidence = primary.confidence
     if vlm_step and map_step:
         agreement = iou(r.mask(vlm_step), r.mask(map_step))
-        answer += f" The deterministic change map flags {_pct(map_step.outputs['fraction'])}"
+        answer += (f" The deterministic change map (heuristic pixel differencing) flags "
+                   f"{_pct(map_step.outputs['fraction'])}")
         answer += f" (agreement IoU {agreement:.2f})." if agreement is not None else "."
         confidence = Confidence(value=round(agreement, 3) if agreement is not None else None,
                                 method="agreement IoU between VLM change mask and deterministic change map (heuristic)")
@@ -142,7 +145,12 @@ def _change(intent, r, ctx, run_dir):
     masks = [(r.mask(map_step), "yellow"), (r.mask(vlm_step), "red")]
     array = ev.side_by_side(ctx.rgb(0), ev.overlay(ctx.rgb(1), masks=masks))
     label = "before | after with change (red: VLM, yellow: deterministic map)"
-    return answer, confidence, [_overlay_evidence(array, run_dir, "change", label, primary.step_id)]
+    # The same change marks on the later image alone, which shares the pair's pixel grid (validation
+    # requires it), so a map can pin it where the change is. The composite matches no single grid.
+    on_map = _overlay_evidence(ev.overlay(ctx.rgb(1), masks=masks), run_dir, "change_on_after",
+                               "changed areas on the later image (red: VLM, yellow: deterministic map, heuristic)",
+                               primary.step_id, 1, ctx)
+    return answer, confidence, [on_map, _overlay_evidence(array, run_dir, "change", label, primary.step_id)]
 
 
 def _cross_modal(intent, r, ctx, run_dir):

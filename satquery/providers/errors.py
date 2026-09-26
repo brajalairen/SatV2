@@ -60,10 +60,30 @@ class RasterUnreadable(RetrievalError):
     status, code = 502, "raster_unreadable"
 
 
-class QueryNeedsMultipleDates(RetrievalError):
-    """The question needs two or more acquisitions; single-date retrieval cannot answer it.
+# --------------------------------------------------------------------------- temporal (two-date) retrieval
 
-    Refused explicitly rather than answered from one image (CLAUDE.md section 7).
-    """
 
-    status, code = 422, "needs_multiple_dates"
+class TemporalRangeUnsupported(RetrievalError):
+    """The periods the question names cannot be searched: in the future, before Sentinel-2, or too short."""
+
+    status, code = 422, "temporal_range_unsupported"
+
+
+class NoEarlierImagery(RetrievalError):
+    status, code = 404, "no_earlier_imagery"
+
+
+class NoLaterImagery(RetrievalError):
+    status, code = 404, "no_later_imagery"
+
+
+class OnlyOneAcquisition(RetrievalError):
+    """Only one acquisition date qualifies. It is never duplicated to fake a pair."""
+
+    status, code = 404, "only_one_acquisition"
+
+
+class GridsIncompatible(RetrievalError):
+    """The two rasters do not share a pixel grid, so no pixel-wise comparison is run."""
+
+    status, code = 502, "grids_incompatible"

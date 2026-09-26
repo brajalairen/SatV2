@@ -5,7 +5,7 @@
  *  connected to anything and say so: retrieval does not read them (D-023, no fake capability). */
 
 import { ChevronDown, ChevronUp, Eye, EyeOff, ImageOff, Layers, Trash2 } from "lucide-react";
-import { useAppStore, selectAnalysisImages, type Layer } from "../state/useAppStore";
+import { useAppStore, nextAnalysisSource, type Layer } from "../state/useAppStore";
 import { useMap, fitBounds } from "../map/MapView";
 import { Button, cx, inputClass, NotConnected, Segmented, SectionGroup, Tooltip } from "../ui/primitives";
 import { EmptyState } from "./Sidebar";
@@ -13,7 +13,10 @@ import type { Modality } from "../state/types";
 
 export function LayersPanel() {
   const layers = useAppStore((s) => s.layers);
-  const chosen = selectAnalysisImages(layers);
+  const aoi = useAppStore((s) => s.aoi);
+  // A retrieved scene is not "in use" while a drawn rectangle will retrieve afresh for the next question.
+  const source = nextAnalysisSource(layers, aoi);
+  const chosen = source.kind === "images" ? source.images : [];
   const chosenIds = new Set(chosen.map((l) => l.id));
 
   if (!layers.length) {

@@ -6,6 +6,7 @@ import { MapView } from "./map/MapView";
 import { AoiLayer } from "./map/AoiLayer";
 import { ImageCanvas } from "./map/ImageCanvas";
 import { CompassControl, ZoomControls } from "./map/MapControls";
+import { BasemapControl } from "./map/BasemapControl";
 import { Sidebar } from "./sidebar/Sidebar";
 import { AICommandBar } from "./command/AICommandBar";
 import { ResultOverlay } from "./results/ResultOverlay";
@@ -48,7 +49,7 @@ export default function App() {
             )}
             <Surface className="p-1">
               <IconButton
-                label={theme === "dark" ? "Switch to light map" : "Switch to dark map"}
+                label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
                 side="left"
                 onClick={toggleTheme}
               >
@@ -58,7 +59,9 @@ export default function App() {
             <CompassControl />
           </div>
 
-          <div className="absolute right-4 bottom-28 z-20">
+          {/* Anchored where the zoom buttons always were; the basemap picker stacks above them. */}
+          <div className="absolute right-4 bottom-28 z-20 flex flex-col items-end gap-2">
+            <BasemapControl />
             <ZoomControls />
           </div>
         </MapView>

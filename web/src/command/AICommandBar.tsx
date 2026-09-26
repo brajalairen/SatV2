@@ -13,7 +13,7 @@ function Elapsed() {
   return <span className="tabular-nums">{seconds} s</span>;
 }
 import { ArrowUp, Plus, SquareDashed } from "lucide-react";
-import { PROGRESS_LABELS, isRectangle, useAppStore, selectAnalysisImages } from "../state/useAppStore";
+import { PROGRESS_LABELS, nextAnalysisSource, useAppStore } from "../state/useAppStore";
 import { api } from "../state/api";
 import { Spinner, Surface, cx, IconButton } from "../ui/primitives";
 import { UploadMenu } from "./UploadMenu";
@@ -37,13 +37,15 @@ export function AICommandBar() {
   const pendingQuery = useAppStore((s) => s.pendingQuery);
   const setPendingQuery = useAppStore((s) => s.setPendingQuery);
 
-  const images = selectAnalysisImages(layers);
+  // The same routing the store uses, so what this bar says matches what the question will run on.
+  const source = nextAnalysisSource(layers, aoi);
+  const images = source.kind === "images" ? source.images : [];
   const hasImages = images.length > 0;
-  // With no imagery loaded, a drawn rectangle can fetch its own: the question is answerable.
-  const canFetchForArea = !hasImages && isRectangle(aoi);
+  // A drawn rectangle with none of the user's own imagery under it retrieves its own.
+  const canFetchForArea = source.kind === "fetch";
   const ready = hasImages || canFetchForArea;
   // A circle or polygon with nothing under it: retrieval takes a box, so say so rather than convert.
-  const areaShapeUnsupported = !hasImages && Boolean(aoi) && !isRectangle(aoi);
+  const areaShapeUnsupported = source.kind === "none" && Boolean(aoi);
 
   useEffect(() => {
     api.exampleQueries().then(setSuggestions).catch(() => setSuggestions([]));

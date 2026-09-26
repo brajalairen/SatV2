@@ -54,3 +54,50 @@ def test_one_live_retrieval_end_to_end(provider, tmp_path):
     assert image.band_names_assumed is False
     assert image.crs is not None
     assert render_rgb(image).shape[2] == 3
+
+
+def test_one_live_temporal_retrieval_feeds_the_change_pipeline(tmp_path):
+    """Two real acquisitions for one area, on one grid, analysed by the existing bi-temporal pipeline."""
+    import time
+    from datetime import date
+
+    from satquery.api import analyze
+    from satquery.providers.temporal import resolve_windows
+    from satquery.schemas import AnalysisRequest, ImageInput
+    from satquery.settings import Settings
+    from satquery.specialists.vlm import FakeVLM
+
+    settings = load_settings()
+    if not settings.copernicus_configured:
+        pytest.skip("Copernicus credentials are not configured in .env")
+    provider = CopernicusSentinelProvider(  # shipped defaults: 20% cloud limit
+        settings.copernicus_client_id, settings.copernicus_client_secret,
+        max_cloud=settings.copernicus_max_cloud, max_aoi_km2=settings.copernicus_max_aoi_km2,
+        resolution_m=settings.copernicus_resolution_m)
+    area = (55.40, 25.05, 55.45, 25.10)  # ~5 x 5.5 km inland of Dubai: usually cloud-free
+    windows = resolve_windows("How has this area changed over the last 3 months?")
+
+    started = time.perf_counter()
+    before, after = provider.retrieve_pair(area, bands_for_target(None), windows, tmp_path / "pair")
+    print(f"\n  retrieved in {time.perf_counter() - started:.1f} s")
+    for role, scene in (("before", before), ("after", after)):
+        m = scene.metadata
+        print(f"  {role}: {m.scene_id} | {m.acquired_datetime} | cloud {m.cloud_cover}% | {m.width}x{m.height}")
+
+    b, a = before.metadata, after.metadata
+    assert b.acquired < a.acquired and b.scene_id != a.scene_id, "two different acquisitions"
+    assert windows.before.start <= date.fromisoformat(b.acquired) <= windows.before.end
+    assert windows.after.start <= date.fromisoformat(a.acquired) <= windows.after.end
+    assert b.cloud_cover < settings.copernicus_max_cloud and a.cloud_cover < settings.copernicus_max_cloud
+    assert b.bbox_wgs84 == a.bbox_wgs84 == area
+    assert before.path.read_bytes() != after.path.read_bytes(), "not one image written twice"
+
+    # the existing pipeline takes the pair as-is: the deterministic change map runs on real pixels
+    response = analyze(AnalysisRequest(query="What changed here?", images=[
+        ImageInput(path=str(before.path), modality="optical", acquired=b.acquired),
+        ImageInput(path=str(after.path), modality="optical", acquired=a.acquired)]),
+        settings=Settings(vlm_backend="fake", runs_dir=tmp_path / "runs"), vlm=FakeVLM())
+    assert response.trace.input_config == "pair_bitemporal" and response.task == "change_analysis"
+    change = next(s for s in response.trace.steps if s.tool == "change.map")
+    assert change.status == "ok"
+    print(f"  change.map: {change.outputs['fraction'] * 100:.1f}% flagged (heuristic)")

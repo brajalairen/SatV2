@@ -1,11 +1,13 @@
 /** Store behaviour that the browser checks cover end to end: what an analysis is sent, which result
  *  a removed layer invalidates, and what cancelling does. The API module is mocked. */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
   areaGeometry,
   isRectangle,
+  nextAnalysisSource,
+  readBasemap,
   selectAnalysisImages,
   temporalReadiness,
   useAppStore,
@@ -64,6 +66,12 @@ function result(uploadIds: string[]): AnalyzeResult {
 }
 
 /** A rectangle: every corner sits on the bounding box, so imagery can be fetched for it. */
+/** A single-date /api/fetch-imagery answer, in the shape the server sends it. */
+function singleFetch(scene: UploadInfo, metadata: Record<string, unknown>) {
+  return { mode: "single", upload: scene, metadata, images: [{ role: "single", upload: scene, metadata }],
+           temporal: null, cached: false };
+}
+
 const polygonAoi = (): Aoi => ({
   feature: {
     type: "Feature", properties: {},
@@ -100,8 +108,9 @@ beforeEach(() => {
   analyze.mockResolvedValue(result(["a"]));
   useAppStore.setState({
     layers: [], aoi: null, result: null, error: null, pending: false, drawMode: null,
-    stage: null, scene: null,
+    stage: null, scenes: [], basemap: "standard",
   });
+  localStorage.removeItem("satquery.basemap");
 });
 
 describe("choosing what to analyse", () => {
@@ -231,10 +240,9 @@ describe("areas saved in the browser", () => {
 describe("fetching imagery for a drawn area", () => {
   /** What /api/fetch-imagery answers with: an ordinary upload plus the scene's provenance. */
   function fetched(id = "fetched-1") {
-    return {
-      upload: { ...upload(id), name: "Sentinel-2 L2A 2026-09-05", acquired: "2026-09-05" },
-      cached: false,
-      metadata: {
+    return singleFetch(
+      { ...upload(id), name: "Sentinel-2 L2A 2026-09-05", acquired: "2026-09-05" },
+      {
         provider: "Copernicus Data Space Ecosystem", collection: "sentinel-2-l2a",
         satellite: "Sentinel-2", product_level: "L2A", acquired: "2026-09-05",
         acquired_datetime: "2026-09-05T05:53:55Z", cloud_cover: 41.96,
@@ -244,7 +252,7 @@ describe("fetching imagery for a drawn area", () => {
         attribution: "Contains modified Copernicus Sentinel data", cached: false,
         alternatives_considered: 7,
       },
-    };
+    );
   }
 
   it("recognises a rectangle, and only a rectangle", () => {
@@ -278,7 +286,9 @@ describe("fetching imagery for a drawn area", () => {
 
     await useAppStore.getState().runAnalysis("what is here?");
 
-    const scene = useAppStore.getState().scene;
+    const scenes = useAppStore.getState().scenes;
+    expect(scenes).toHaveLength(1);
+    const scene = scenes[0];
     expect(scene?.satellite).toBe("Sentinel-2");
     expect(scene?.acquired).toBe("2026-09-05");
     expect(scene?.cloud_cover).toBe(41.96);
@@ -310,9 +320,9 @@ describe("fetching imagery for a drawn area", () => {
   });
 
   it("clears the previous scene when a new analysis starts", async () => {
-    useAppStore.setState({ scene: fetched().metadata, layers: [upload("a")] });
+    useAppStore.setState({ scenes: [fetched().metadata as never], layers: [upload("a")] });
     await useAppStore.getState().runAnalysis("what is here?");
-    expect(useAppStore.getState().scene).toBeNull();
+    expect(useAppStore.getState().scenes).toEqual([]);
   });
 });
 
@@ -323,7 +333,7 @@ describe("when retrieval or analysis fails", () => {
     ["no_imagery_found", 404, "No Sentinel-2 L2A scene matched this area within the search window."],
     ["aoi_too_large", 413, "The selected area is about 4,626,540 km2, above the 400 km2 limit."],
     ["credentials_missing", 503, "Copernicus credentials are not configured."],
-    ["needs_multiple_dates", 422, "\"changed\" asks about change over time, which needs two dates."],
+    ["only_one_acquisition", 404, "Only one suitable Sentinel-2 acquisition was found for this area and time window."],
   ])("keeps the server's own wording for %s", async (code, status, message) => {
     fetchImagery.mockRejectedValue(new ApiError(message, status, code));
     rectangle();
@@ -348,10 +358,8 @@ describe("when retrieval or analysis fails", () => {
   });
 
   it("reports an analysis failure without blaming retrieval", async () => {
-    fetchImagery.mockResolvedValue({
-      upload: upload("fetched-1"), cached: false,
-      metadata: { satellite: "Sentinel-2", acquired: "2026-09-05", cloud_cover: 1 },
-    });
+    fetchImagery.mockResolvedValue(
+      singleFetch(upload("fetched-1"), { satellite: "Sentinel-2", acquired: "2026-09-05", cloud_cover: 1 }));
     analyze.mockRejectedValue(new ApiError("The image could not be read.", 400));
     rectangle();
 
@@ -378,5 +386,203 @@ describe("when retrieval or analysis fails", () => {
     expect(useAppStore.getState().pending).toBe(false);
     expect(useAppStore.getState().stage).toBeNull();
     expect(useAppStore.getState().error).toMatch(/stopped waiting/i);
+  });
+});
+
+
+describe("choosing a basemap", () => {
+  it("changes the basemap and nothing else, and makes no request", () => {
+    const scenes = [{ satellite: "Sentinel-2", acquired: "2026-09-19", cloud_cover: 0.02 }] as never;
+    useAppStore.setState({
+      layers: [upload("a")],
+      aoi: polygonAoi(),
+      result: result(["a"]),
+      scenes,
+      pendingQuery: "are there water bodies here?",
+      hiddenOverlays: new Set(["/api/runs/r/input.png"]),
+      drawMode: "rectangle",
+    });
+    const before = useAppStore.getState();
+
+    for (const basemap of ["satellite", "hybrid", "standard"] as const) {
+      useAppStore.getState().setBasemap(basemap);
+      const after = useAppStore.getState();
+      expect(after.basemap).toBe(basemap);
+      // the same objects, not copies: nothing was recomputed or reset
+      expect(after.aoi).toBe(before.aoi);
+      expect(after.layers).toBe(before.layers);
+      expect(after.result).toBe(before.result);
+      expect(after.scenes).toBe(before.scenes);
+      expect(after.pendingQuery).toBe(before.pendingQuery);
+      expect(after.hiddenOverlays).toBe(before.hiddenOverlays);
+      expect(after.drawMode).toBe(before.drawMode);
+      expect(after.error).toBe(before.error);
+      expect(after.pending).toBe(false);
+    }
+    expect(fetchImagery).not.toHaveBeenCalled();
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it("does not change what a later analysis fetches or sends", async () => {
+    fetchImagery.mockResolvedValue(
+      singleFetch(upload("fetched-1"), { satellite: "Sentinel-2", acquired: "2026-09-19", cloud_cover: 0.02 }));
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    useAppStore.getState().setBasemap("hybrid");
+
+    await useAppStore.getState().runAnalysis("are there water bodies here?");
+
+    // retrieval is asked for the drawn area and nothing about the basemap
+    expect(fetchImagery.mock.calls[0]?.[1]).toEqual([10, 50, 11, 51]);
+    expect(JSON.stringify(fetchImagery.mock.calls[0])).not.toMatch(/hybrid|satellite|basemap/i);
+    expect(JSON.stringify(analyze.mock.calls[0])).not.toMatch(/hybrid|satellite|basemap/i);
+  });
+
+  it("remembers the choice in this browser, and ignores a value it does not offer", () => {
+    useAppStore.getState().setBasemap("hybrid");
+    expect(localStorage.getItem("satquery.basemap")).toBe("hybrid");
+    expect(readBasemap()).toBe("hybrid");
+
+    localStorage.setItem("satquery.basemap", "terrain");
+    expect(readBasemap()).toBe("standard");
+  });
+
+  it("still switches when browser storage is blocked", () => {
+    const blocked = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage blocked");
+    });
+    useAppStore.getState().setBasemap("satellite");
+    expect(useAppStore.getState().basemap).toBe("satellite");
+    blocked.mockRestore();
+  });
+});
+
+
+describe("comparing two dates", () => {
+  function scene(role: "before" | "after", id: string, acquired: string, cloud: number) {
+    return {
+      role,
+      upload: { ...upload(id), name: `Sentinel-2 L2A ${acquired} (${role})`, acquired },
+      metadata: { satellite: "Sentinel-2", product_level: "L2A", acquired, cloud_cover: cloud, scene_id: id },
+    };
+  }
+
+  /** A temporal /api/fetch-imagery answer: two real acquisitions, oldest first. */
+  function temporalFetch() {
+    const before = scene("before", "jul", "2026-07-05", 1.5);
+    const after = scene("after", "sep", "2026-09-19", 0.02);
+    return {
+      mode: "temporal", upload: after.upload, metadata: after.metadata, images: [before, after], cached: false,
+      temporal: {
+        basis: "relative period", explanation: "first vs last third", days_apart: 76,
+        before_window: { start: "2026-06-30", end: "2026-07-29", label: "2026-06-30 to 2026-07-29" },
+        after_window: { start: "2026-08-29", end: "2026-09-27", label: "2026-08-29 to 2026-09-27" },
+      },
+    };
+  }
+
+  const unsubscribe: (() => void)[] = [];
+  afterEach(() => unsubscribe.splice(0).forEach((stop) => stop()));
+
+  function recordStages(): string[] {
+    const stages: string[] = [];
+    unsubscribe.push(useAppStore.subscribe((state) => {
+      if (state.stage && stages.at(-1) !== state.stage) stages.push(state.stage);
+    }));
+    return stages;
+  }
+
+  it("sends both retrieved scenes to the existing analysis, earlier first", async () => {
+    fetchImagery.mockResolvedValue(temporalFetch());
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+
+    await useAppStore.getState().runAnalysis("What changed here over the last 3 months?");
+
+    expect(analyze.mock.calls[0]?.[1]).toEqual([
+      { upload_id: "jul", modality: "optical", acquired: "2026-07-05" },
+      { upload_id: "sep", modality: "optical", acquired: "2026-09-19" },
+    ]);
+  });
+
+  it("keeps both provenance records, with their real dates and cloud cover", async () => {
+    fetchImagery.mockResolvedValue(temporalFetch());
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+
+    await useAppStore.getState().runAnalysis("What changed here?");
+
+    const scenes = useAppStore.getState().scenes;
+    expect(scenes.map((s) => s.acquired)).toEqual(["2026-07-05", "2026-09-19"]);
+    expect(scenes.map((s) => s.cloud_cover)).toEqual([1.5, 0.02]);
+  });
+
+  it("puts both scenes on the map, marked as retrieved", async () => {
+    fetchImagery.mockResolvedValue(temporalFetch());
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+
+    await useAppStore.getState().runAnalysis("What changed here?");
+
+    const layers = useAppStore.getState().layers;
+    expect(layers.map((l) => l.id)).toEqual(["jul", "sep"]);
+    expect(layers.every((l) => l.fetched)).toBe(true);
+  });
+
+  it("shows the comparison stages it really goes through", async () => {
+    fetchImagery.mockResolvedValue(temporalFetch());
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    const stages = recordStages();
+
+    await useAppStore.getState().runAnalysis("What changed here?");
+
+    expect(stages).toEqual(["searching", "comparing", "analysing-change"]);
+  });
+
+  it("keeps the single-date stages for a single-date question", async () => {
+    fetchImagery.mockResolvedValue(fetchedSingle());
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    const stages = recordStages();
+
+    await useAppStore.getState().runAnalysis("Are there water bodies here?");
+
+    expect(stages).toEqual(["searching", "preparing", "analysing"]);
+  });
+
+  function fetchedSingle() {
+    return singleFetch({ ...upload("one"), acquired: "2026-09-19" },
+                       { satellite: "Sentinel-2", acquired: "2026-09-19", cloud_cover: 0.02 });
+  }
+});
+
+describe("what the next question runs on", () => {
+  const retrieved = (id: string) => ({ ...upload(id), fetched: true });
+
+  it("a retrieved scene never blocks a new retrieval for the drawn rectangle", async () => {
+    // after a single-date answer, a question about change must reach two-date retrieval
+    fetchImagery.mockResolvedValue(singleFetch(upload("new"), { satellite: "Sentinel-2", acquired: "2026-09-19" }));
+    useAppStore.setState({ layers: [retrieved("old")], aoi: polygonAoi() });
+
+    expect(nextAnalysisSource(useAppStore.getState().layers, polygonAoi())).toEqual({ kind: "fetch" });
+    await useAppStore.getState().runAnalysis("What changed here?");
+
+    expect(fetchImagery).toHaveBeenCalledTimes(1);
+  });
+
+  it("the user's own imagery still wins over retrieval", async () => {
+    useAppStore.setState({ layers: [retrieved("old"), upload("mine")], aoi: polygonAoi() });
+
+    await useAppStore.getState().runAnalysis("what is here?");
+
+    expect(fetchImagery).not.toHaveBeenCalled();
+    expect(analyze.mock.calls[0]?.[1]).toEqual([{ upload_id: "mine", modality: "optical", acquired: null }]);
+  });
+
+  it("retrieved scenes are analysed directly once no rectangle is left", () => {
+    const source = nextAnalysisSource([retrieved("old")], null);
+    expect(source.kind === "images" && source.images.map((l) => l.id)).toEqual(["old"]);
+  });
+
+  it("a new retrieval replaces the layers of the previous one", () => {
+    useAppStore.setState({ layers: [upload("mine"), retrieved("old")] });
+    useAppStore.getState().setFetchedLayers([upload("jul"), upload("sep")]);
+
+    expect(useAppStore.getState().layers.map((l) => l.id)).toEqual(["mine", "jul", "sep"]);
   });
 });

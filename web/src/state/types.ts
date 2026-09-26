@@ -183,11 +183,42 @@ export interface SceneMetadata {
   attribution: string;
   cached: boolean;
   alternatives_considered: number;
+  /** How the raster was produced (Process API, one day only, reflectance, grid). */
+  processing: string;
+}
+
+/** One retrieved scene, registered as an upload. Mirrors satquery.server.FetchedScene. */
+export interface FetchedScene {
+  role: "single" | "before" | "after";
+  upload: UploadInfo;
+  metadata: SceneMetadata;
+}
+
+/** A period searched for one scene of a comparison. Never an acquisition date. */
+export interface ComparisonWindow {
+  start: string;
+  end: string;
+  label: string;
+}
+
+/** How the two dates of a comparison were chosen. Mirrors satquery.server.TemporalInfo. */
+export interface TemporalInfo {
+  basis: string;
+  explanation: string;
+  before_window: ComparisonWindow;
+  after_window: ComparisonWindow;
+  days_apart: number;
 }
 
 export interface FetchImageryResult {
+  /** "temporal" when the question needs two dates and two acquisitions were retrieved. */
+  mode: "single" | "temporal";
+  /** The most recent scene, kept for single-date clients. */
   upload: UploadInfo;
   metadata: SceneMetadata;
+  /** Every scene retrieved, oldest first: one, or two for a comparison. */
+  images: FetchedScene[];
+  temporal: TemporalInfo | null;
   cached: boolean;
 }
 

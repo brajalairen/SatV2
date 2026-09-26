@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from satquery.agent.aggregator import aggregate
 from satquery.agent.executor import execute
-from satquery.agent.intents import COMPATIBLE_TASKS, classify, find_target
+from satquery.agent.intents import COMPATIBLE_TASKS, classify, find_target, needs_multiple_dates
 from satquery.agent.planner import build_plan
 from satquery.evidence import write_reports
 from satquery import geo
@@ -91,6 +91,16 @@ def analyze(request: AnalysisRequest, settings: Settings | None = None, vlm: VLM
 
     config = detect_input_config([image.modality for image in images])
     trace.input_config = config
+    # One image cannot show a change, so the VLM is never asked to infer one from a single frame.
+    # A forced task is the caller's explicit choice and is checked against the inputs below instead.
+    phrase = None if request.forced_task or len(images) != 1 else needs_multiple_dates(request.query)
+    if phrase:
+        trace.validation.append(issue(
+            "needs_multiple_dates",
+            f'"{phrase}" asks about change over time, which needs two images of the same area from different '
+            "dates; one image cannot show a change. Add a second, dated image of the same area, or draw a "
+            "rectangle on the map so two Sentinel-2 dates can be retrieved for it."))
+        return reject()
     if request.forced_task:
         target, _ = find_target(request.query)
         intent = Intent(task=request.forced_task, target=target, matched_rule="task forced by caller")

@@ -358,3 +358,147 @@ def test_the_cache_key_covers_every_input_that_changes_the_result(provider):
 
     coarse = CopernicusSentinelProvider("id", "secret", resolution_m=20.0)
     assert base != coarse.cache_key(BBOX, BANDS), "resolution"
+
+
+# ===================================================================== two-date (temporal) retrieval
+
+from datetime import date as _date  # noqa: E402
+
+from satquery.providers.copernicus import check_same_grid  # noqa: E402
+from satquery.providers.errors import (  # noqa: E402
+    GridsIncompatible,
+    NoEarlierImagery,
+    NoLaterImagery,
+    OnlyOneAcquisition,
+)
+from satquery.providers.temporal import resolve_windows  # noqa: E402
+
+WINDOWS = resolve_windows("How has this area changed over the last 3 months?", _date(2026, 9, 27))
+
+
+def test_a_window_search_sends_exact_dates_and_the_cloud_filter(monkeypatch, provider):
+    client = _wire(monkeypatch, provider, [_token_response(), FakeResponse(200, {"features": []})])
+    provider.search(BBOX, start=_date(2026, 6, 30), end=_date(2026, 7, 29), max_cloud=20.0)
+
+    payload = client.calls[1]["json"]
+    assert payload["datetime"] == "2026-06-30T00:00:00Z/2026-07-29T23:59:59Z"
+    assert payload["filter"] == '"eo:cloud_cover" < 20.0'
+
+
+def test_the_pair_is_two_different_acquisitions_earlier_first(provider):
+    before, after = provider.select_pair(
+        [_feature("b1", "2026-07-05T06:00:00Z", 2.0), _feature("b2", "2026-07-20T06:00:00Z", 1.0)],
+        [_feature("a1", "2026-09-01T06:00:00Z", 0.5), _feature("a2", "2026-09-20T06:00:00Z", 3.0)],
+    )
+    assert before["id"] != after["id"]
+    assert before["properties"]["datetime"][:10] < after["properties"]["datetime"][:10]
+
+
+def test_among_equally_clear_pairs_the_furthest_apart_wins(provider):
+    # every scene here is under 5% cloud, so separation decides: earliest before, latest after
+    before, after = provider.select_pair(
+        [_feature("early", "2026-07-01T06:00:00Z", 1.0), _feature("late", "2026-07-25T06:00:00Z", 0.1)],
+        [_feature("soon", "2026-08-30T06:00:00Z", 0.1), _feature("last", "2026-09-25T06:00:00Z", 2.0)],
+    )
+    assert (before["id"], after["id"]) == ("early", "last")
+
+
+def test_a_clearer_scene_beats_a_wider_gap(provider):
+    before, _ = provider.select_pair(
+        [_feature("cloudy-early", "2026-07-01T06:00:00Z", 14.0), _feature("clear-later", "2026-07-20T06:00:00Z", 1.0)],
+        [_feature("a", "2026-09-20T06:00:00Z", 1.0)],
+    )
+    assert before["id"] == "clear-later"
+
+
+def test_the_same_acquisition_is_never_used_for_both_dates(provider):
+    # overlapping windows that contain one pass only: refuse, never duplicate it into a fake pair
+    same_day = _feature("only", "2026-09-10T06:00:00Z", 1.0)
+    with pytest.raises(OnlyOneAcquisition) as caught:
+        provider.select_pair([same_day], [same_day])
+    assert "Only one suitable Sentinel-2 acquisition" in caught.value.message
+
+
+def test_two_tiles_of_one_pass_count_as_one_acquisition(provider):
+    tile_a = _feature("T40RCN", "2026-09-10T06:00:00Z", 1.0)
+    tile_b = _feature("T40RDN", "2026-09-10T06:00:05Z", 2.0)
+    with pytest.raises(OnlyOneAcquisition):
+        provider.select_pair([tile_a], [tile_b])
+
+
+def test_the_cloud_threshold_is_respected_even_if_the_catalogue_let_a_scene_through(provider):
+    with pytest.raises(NoEarlierImagery):
+        provider.select_pair([_feature("cloudy", "2026-07-01T06:00:00Z", 45.0)],
+                             [_feature("clear", "2026-09-20T06:00:00Z", 1.0)], max_cloud=20.0)
+
+
+def test_no_earlier_scene_is_reported_as_such(provider):
+    with pytest.raises(NoEarlierImagery) as caught:
+        provider.select_pair([], [_feature("a", "2026-09-20T06:00:00Z", 1.0)])
+    assert "earlier date could not be retrieved" in caught.value.message
+    assert caught.value.code == "no_earlier_imagery"
+
+
+def test_no_later_scene_is_reported_as_such(provider):
+    with pytest.raises(NoLaterImagery) as caught:
+        provider.select_pair([_feature("b", "2026-07-01T06:00:00Z", 1.0)], [])
+    assert "later date could not be retrieved" in caught.value.message
+
+
+def test_two_scenes_are_retrieved_for_the_same_area_on_their_own_dates(monkeypatch, tmp_path, provider):
+    scene_bytes = _write_scene(tmp_path / "source.tif").read_bytes()
+    client = _wire(monkeypatch, provider, [
+        _token_response(),
+        FakeResponse(200, {"features": [_feature("S2A_JUL", "2026-07-05T06:20:00Z", 1.5)]}),
+        FakeResponse(200, {"features": [_feature("S2B_SEP", "2026-09-19T06:20:00Z", 0.02)]}),
+        FakeResponse(200, content=scene_bytes),
+        FakeResponse(200, content=scene_bytes),
+    ])
+
+    before, after = provider.retrieve_pair(BBOX, BANDS, WINDOWS, tmp_path / "pair")
+
+    processed = [c["json"] for c in client.calls if c["json"] and "evalscript" in c["json"]]
+    assert len(processed) == 2, "exactly two Process API requests"
+    days = sorted(p["input"]["data"][0]["dataFilter"]["timeRange"]["from"][:10] for p in processed)
+    assert days == ["2026-07-05", "2026-09-19"], "each download is pinned to its own acquisition day"
+    assert all(p["input"]["bounds"]["bbox"] == list(BBOX) for p in processed), "same area for both"
+    assert before.path != after.path and before.path.is_file() and after.path.is_file()
+    assert (before.metadata.acquired, after.metadata.acquired) == ("2026-07-05", "2026-09-19")
+    assert (before.metadata.scene_id, after.metadata.scene_id) == ("S2A_JUL", "S2B_SEP")
+    assert before.metadata.cloud_cover == 1.5 and after.metadata.cloud_cover == 0.02
+    assert "Process API" in after.metadata.processing
+
+
+def test_retrieved_pairs_share_one_pixel_grid(tmp_path):
+    first, second = _write_scene(tmp_path / "a.tif"), _write_scene(tmp_path / "b.tif")
+    check_same_grid(first, second)  # identical grids pass
+
+
+def test_a_pair_on_different_grids_is_refused_not_resampled(monkeypatch, tmp_path, provider):
+    small = _write_scene(tmp_path / "small.tif")
+    big = tmp_path / "big.tif"
+    data = np.zeros((4, 30, 30), dtype=np.float32)
+    with rasterio.open(big, "w", driver="GTiff", height=30, width=30, count=4, dtype="float32",
+                       crs="EPSG:4326", transform=from_origin(72.90, 19.10, 0.0001, 0.0001)) as dst:
+        dst.write(data)
+    _wire(monkeypatch, provider, [
+        _token_response(),
+        FakeResponse(200, {"features": [_feature("b", "2026-07-05T06:20:00Z", 1.0)]}),
+        FakeResponse(200, {"features": [_feature("a", "2026-09-19T06:20:00Z", 1.0)]}),
+        FakeResponse(200, content=small.read_bytes()),
+        FakeResponse(200, content=big.read_bytes()),
+    ])
+    with pytest.raises(GridsIncompatible) as caught:
+        provider.retrieve_pair(BBOX, BANDS, WINDOWS, tmp_path / "pair")
+    assert "not resampled" in caught.value.message
+
+
+def test_the_temporal_cache_key_never_matches_a_single_date_key(provider):
+    temporal = provider.pair_cache_key(BBOX, BANDS, WINDOWS)
+    assert temporal != provider.cache_key(BBOX, BANDS)
+    assert temporal == provider.pair_cache_key(BBOX, BANDS, WINDOWS), "stable"
+    other = resolve_windows("What changed between June and September?", _date(2026, 9, 27))
+    assert temporal != provider.pair_cache_key(BBOX, BANDS, other), "window"
+    assert temporal != provider.pair_cache_key(BBOX, BANDS, WINDOWS, max_cloud=50.0), "cloud threshold"
+    assert temporal != provider.pair_cache_key((72.91, 19.0, 73.0, 19.1), BANDS, WINDOWS), "AOI"
+    assert temporal != provider.pair_cache_key(BBOX, ["B04", "B08"], WINDOWS), "bands"

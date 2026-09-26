@@ -3,7 +3,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Map as MapLibreMap, type GeoJSONSource, type ErrorEvent } from "maplibre-gl";
-import { basemapUrl, INITIAL_VIEW, offlineStyle } from "./basemap";
+import { basemapStyle, INITIAL_VIEW, offlineStyle, styleKey } from "./basemap";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore, visibleOverlays, type Layer } from "../state/useAppStore";
 import type { OverlayLayer } from "../state/types";
@@ -41,8 +41,11 @@ export function MapView({ children }: { children?: ReactNode }) {
   const [styleReady, setStyleReady] = useState(false);
 
   const theme = useAppStore((s) => s.theme);
-  /** The theme whose basemap is loaded, so the style is only replaced when the theme changes. */
-  const styledTheme = useRef(theme);
+  const basemap = useAppStore((s) => s.basemap);
+  /** The style that should be showing, and the one that is loaded. The style is replaced only when
+   *  they differ: a new basemap, or a new theme while the basemap is Standard. */
+  const wantedStyle = styleKey(basemap, theme);
+  const loadedStyle = useRef(wantedStyle);
   const layers = useAppStore((s) => s.layers);
   // useShallow: visibleOverlays builds a new array each call, which plain reference
   // equality would treat as a change on every render.
@@ -54,7 +57,7 @@ export function MapView({ children }: { children?: ReactNode }) {
     if (!container.current) return;
     const instance = new MapLibreMap({
       container: container.current,
-      style: basemapUrl(theme),
+      style: basemapStyle(basemap, theme),
       center: INITIAL_VIEW.center,
       zoom: INITIAL_VIEW.zoom,
       attributionControl: { compact: true },
@@ -77,17 +80,26 @@ export function MapView({ children }: { children?: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- swap the basemap with the theme, then re-add everything the style dropped. Never on mount:
-  //     the constructor already loaded this theme's basemap. `diff: false` rebuilds the style, so
-  //     "style.load" fires and every layer effect re-adds its sources. A diff would instead drop the
-  //     sources added at runtime (rasters, drawing) without firing it; re-applying the same style on
-  //     mount did exactly that, intermittently deleting the drawing layers.
+  // --- swap the basemap (a new choice, or a new theme under Standard), then re-add everything the
+  //     style dropped. Never on mount: the constructor already loaded the right style. `diff: false`
+  //     rebuilds the style, so "style.load" fires and every layer effect re-adds its sources. A diff
+  //     would instead drop the sources added at runtime (rasters, drawing) without firing it;
+  //     re-applying the same style on mount did exactly that, intermittently deleting the drawing layers.
+  //
+  //     Two steps, so the swap cannot race React. The first marks the style unready, which stops the
+  //     drawing tool and idles every layer effect; the second replaces the style only once that has
+  //     been committed. In one step, a Satellite or Hybrid style (a style object, not a URL) can load
+  //     within a frame, and React may then batch "unready" and "ready" into a single render in which
+  //     nothing seems to change, so the overlays, the area and the drawing layers are never re-added.
   useEffect(() => {
-    if (!map || styledTheme.current === theme) return;
-    styledTheme.current = theme;
-    setStyleReady(false);
-    map.setStyle(basemapUrl(theme), { diff: false });
-  }, [map, theme]);
+    if (map && loadedStyle.current !== wantedStyle) setStyleReady(false);
+  }, [map, wantedStyle]);
+
+  useEffect(() => {
+    if (!map || styleReady || loadedStyle.current === wantedStyle) return;
+    loadedStyle.current = wantedStyle;
+    map.setStyle(basemapStyle(basemap, theme), { diff: false });
+  }, [map, styleReady, wantedStyle, basemap, theme]);
 
   // --- uploaded rasters
   useEffect(() => {

@@ -290,3 +290,41 @@ def test_changing_the_adapter_does_not_reuse_the_cached_backend(monkeypatch):
 
     assert plain is not adapted
     assert api.get_vlm(Settings(vlm_backend="fake", falcon_adapter="")) is plain
+
+
+# ------------------------------------------------------------------ change questions need two dates
+
+@pytest.mark.parametrize("query", ["What changed here?", "Has vegetation increased?", "Compare this area over time"])
+def test_one_image_never_answers_a_question_about_change(settings, write_tiff, optical_scene, query):
+    """The VLM must not infer a change from a single frame: the request is refused before any tool runs."""
+    path = write_tiff("one.tif", optical_scene, band_names=["B02", "B03", "B04", "B08"])
+    response = run(settings, query, (path, "optical", "2026-09-19"))
+
+    assert response.status == "invalid_input"
+    assert any(i.code == "needs_multiple_dates" for i in response.trace.validation)
+    assert response.trace.plan == [] and response.trace.steps == []
+    assert "two images" in response.answer
+
+
+def test_an_ordinary_question_on_one_image_is_unaffected(settings, write_tiff, optical_scene):
+    path = write_tiff("one.tif", optical_scene, band_names=["B02", "B03", "B04", "B08"])
+    response = run(settings, "Is there a water body in this image?", (path, "optical", None))
+    assert response.status == "ok" and response.task == "vqa"
+
+
+def test_the_change_result_can_be_pinned_on_the_map(settings, write_tiff, optical_scene):
+    """Besides the before|after composite, the change marks are drawn on the later image's own grid."""
+    t1 = write_tiff("t1.tif", optical_scene, band_names=["B02", "B03", "B04", "B08"])
+    changed = optical_scene.copy()
+    changed[:, 40:60, 40:60] = np.array([1800, 1900, 2000, 2200], np.float32)[:, None, None]
+    t2 = write_tiff("t2.tif", changed, band_names=["B02", "B03", "B04", "B08"])
+    response = run(settings, "What changed here?", (t1, "optical", "2026-07-05"), (t2, "optical", "2026-09-19"))
+
+    overlays = [e for e in response.evidence if e.kind == "overlay"]
+    pinned = [e for e in overlays if e.image_index == 1]
+    composite = [e for e in overlays if e.image_index is None]
+    assert pinned and Path(pinned[0].file).is_file() and "changed areas" in pinned[0].label
+    assert composite, "the side-by-side composite is kept for the report"
+    # figures are attributed to their source, and the deterministic one is labelled a heuristic
+    assert "VLM change detection flags" in response.answer
+    assert "deterministic change map (heuristic" in response.answer

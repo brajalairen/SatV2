@@ -326,17 +326,22 @@ export function MenuItem({
   children,
   note,
   disabled,
+  checked,
   onClick,
 }: {
   icon?: ReactNode;
   children: ReactNode;
   note?: string;
   disabled?: boolean;
+  /** Set when the item is one choice among several: it then reads as a radio option. */
+  checked?: boolean;
   onClick?: () => void;
 }) {
   const content = (
     <button
       type="button"
+      role={checked === undefined ? undefined : "menuitemradio"}
+      aria-checked={checked}
       disabled={disabled}
       onClick={onClick}
       className={cx(

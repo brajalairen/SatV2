@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+from satquery.providers.errors import (GridsIncompatible, NoEarlierImagery, NoLaterImagery,
+                                       OnlyOneAcquisition)
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -436,18 +439,25 @@ def test_health_reports_imagery_unavailable_without_credentials(client, monkeypa
     "Has vegetation increased?",
     "Compare this area over time",
 ])
-def test_a_query_needing_two_dates_is_refused_before_any_api_call(client, monkeypatch, query):
-    """Never answer a temporal question from one scene: explain instead (CLAUDE.md section 7)."""
-    def explode(*args, **kwargs):  # pragma: no cover - must never run
-        raise AssertionError("no provider call should happen for a temporal query")
+def test_a_query_needing_two_dates_never_takes_the_single_scene_path(client, monkeypatch, query):
+    """A temporal question is never answered from one scene: it is routed to two-date retrieval."""
+    def single(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("a temporal question must not retrieve a single scene")
 
-    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", explode)
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", single)
+    routed = []
+
+    def pair(self, bbox, bands, windows, destination_dir, **kwargs):
+        routed.append(windows)
+        raise NoLaterImagery("stop here: routing is what this test checks")
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve_pair", pair)
     response = client.post("/api/fetch-imagery", json={"query": query, "aoi_bbox": BBOX})
 
-    assert response.status_code == 422
-    body = response.json()
-    assert body["code"] == "needs_multiple_dates"
-    assert "two" in body["message"].lower() or "bi-temporal" in body["message"].lower()
+    assert len(routed) == 1, "routed to the two-date retrieval"
+    assert response.json()["code"] == "no_later_imagery"
 
 
 def test_an_ordinary_question_is_not_refused_as_temporal(client, monkeypatch):
@@ -552,3 +562,197 @@ def test_a_second_identical_request_is_served_from_cache(client, monkeypatch, wr
 
     assert len(calls) == 1, "the second identical request must not hit the API again"
     assert first["cached"] is False and second["cached"] is True
+
+
+# ------------------------------------------------------------- two-date (temporal) retrieval
+
+TEMPORAL_QUERY = "What changed here over the last 3 months?"
+
+
+@pytest.fixture
+def pair_files(write_tiff, scene):
+    """Two different dates of one area on one grid: the later one has a block that changed."""
+    later = scene.copy()
+    later[:, 8:20, 8:20] = 2900
+    names = ["blue", "green", "red", "nir"]
+    return write_tiff("jul.tif", scene, names), write_tiff("sep.tif", later, names)
+
+
+def _scene_metadata(acquired, cloud, scene_id, bbox):
+    from satquery.providers import SceneMetadata
+
+    return SceneMetadata(provider="Copernicus Data Space Ecosystem", collection="sentinel-2-l2a",
+                         satellite="Sentinel-2", product_level="L2A", acquired=acquired,
+                         acquired_datetime=f"{acquired}T06:20:00Z", cloud_cover=cloud, bbox_wgs84=tuple(bbox),
+                         crs="EPSG:4326", resolution_m=10.0, bands=["B02 (blue)"], width=32, height=32,
+                         scene_id=scene_id, alternatives_considered=4)
+
+
+@pytest.fixture
+def fake_pair(monkeypatch, pair_files):
+    """Replace only the network: two real, distinct rasters, as retrieve_pair would write them."""
+    from satquery.providers import RetrievedScene
+
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    calls = []
+
+    def retrieve_pair(self, bbox, bands, windows, destination_dir, **kwargs):
+        calls.append({"bbox": bbox, "windows": windows})
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        out = []
+        for role, source, acquired, cloud, scene_id in (
+                ("before", pair_files[0], "2026-07-05", 1.5, "S2A_MSIL2A_20260705"),
+                ("after", pair_files[1], "2026-09-19", 0.02, "S2B_MSIL2A_20260919")):
+            path = destination_dir / f"{role}.tif"
+            path.write_bytes(Path(source).read_bytes())
+            out.append(RetrievedScene(path=path, metadata=_scene_metadata(acquired, cloud, scene_id, bbox)))
+        return tuple(out)
+
+    def single(*args, **kwargs):  # pragma: no cover - must never run on the temporal path
+        raise AssertionError("single-scene retrieval used for a temporal question")
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve_pair", retrieve_pair)
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", single)
+    return calls
+
+
+def test_a_temporal_question_retrieves_two_scenes_with_both_provenance_records(client, fake_pair):
+    response = client.post("/api/fetch-imagery", json={"query": TEMPORAL_QUERY, "aoi_bbox": BBOX})
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["mode"] == "temporal"
+    assert [image["role"] for image in body["images"]] == ["before", "after"]
+    before, after = (image["metadata"] for image in body["images"])
+    assert (before["acquired"], after["acquired"]) == ("2026-07-05", "2026-09-19")
+    assert (before["cloud_cover"], after["cloud_cover"]) == (1.5, 0.02)
+    assert before["scene_id"] != after["scene_id"]
+    assert body["images"][0]["upload"]["id"] != body["images"][1]["upload"]["id"]
+    # both for the drawn area, and the single-date fields still describe the latest scene
+    assert before["bbox_wgs84"] == after["bbox_wgs84"] == BBOX
+    assert body["upload"]["id"] == body["images"][1]["upload"]["id"] and body["metadata"]["acquired"] == "2026-09-19"
+    temporal = body["temporal"]
+    assert temporal["basis"] == "relative period" and temporal["days_apart"] == 76
+    assert temporal["before_window"]["end"] < temporal["after_window"]["start"]
+    assert fake_pair[0]["bbox"] == tuple(BBOX)
+
+
+def test_a_single_date_question_still_takes_the_single_scene_path(client, monkeypatch, write_tiff, scene):
+    from satquery.providers import RetrievedScene
+
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    source = write_tiff("single.tif", scene, ["blue", "green", "red", "nir"])
+
+    def retrieve(self, bbox, bands, destination, **kwargs):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(Path(source).read_bytes())
+        return RetrievedScene(path=destination, metadata=_scene_metadata("2026-09-19", 0.02, "S2B", bbox))
+
+    def pair(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("two-date retrieval used for a single-date question")
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", retrieve)
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve_pair", pair)
+    body = client.post("/api/fetch-imagery", json={"query": "Are there water bodies here?", "aoi_bbox": BBOX}).json()
+
+    assert body["mode"] == "single" and body["temporal"] is None
+    assert [image["role"] for image in body["images"]] == ["single"]
+    assert body["images"][0]["upload"]["id"] == body["upload"]["id"]  # the fields single-date clients read
+    assert body["metadata"]["acquired"] == "2026-09-19"
+
+
+def test_the_existing_change_pipeline_receives_the_real_pair(client, fake_pair):
+    fetched = client.post("/api/fetch-imagery", json={"query": TEMPORAL_QUERY, "aoi_bbox": BBOX}).json()
+    images = [{"upload_id": image["upload"]["id"], "modality": "optical"} for image in fetched["images"]]
+
+    result = client.post("/api/analyze", json={"query": TEMPORAL_QUERY, "images": images}).json()
+    response = result["response"]
+    trace = response["trace"]
+
+    assert response["status"] in ("ok", "partial") and response["task"] == "change_analysis"
+    assert trace["input_config"] == "pair_bitemporal"
+    assert [image["acquired"] for image in trace["images"]] == ["2026-07-05", "2026-09-19"]
+    assert {"vlm.change", "change.map"} <= {step["tool"] for step in trace["plan"]}
+    assert response["answer"].startswith("Between 2026-07-05 and 2026-09-19")
+    assert "heuristic" in response["answer"], "the deterministic map is labelled a heuristic"
+    # the change result is pinned on the map, on the later image
+    assert any(layer["image_index"] == 1 and "changed areas" in layer["label"] for layer in result["overlay_layers"])
+
+
+@pytest.mark.parametrize("problem, status, code", [
+    (NoEarlierImagery("No suitable earlier scene."), 404, "no_earlier_imagery"),
+    (NoLaterImagery("No suitable later scene."), 404, "no_later_imagery"),
+    (OnlyOneAcquisition("Only one suitable Sentinel-2 acquisition was found."), 404, "only_one_acquisition"),
+    (GridsIncompatible("The two retrieved scenes do not share a pixel grid."), 502, "grids_incompatible"),
+])
+def test_temporal_failures_are_structured_and_never_fall_back(client, monkeypatch, problem, status, code):
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    single_calls = []
+
+    def pair(*args, **kwargs):
+        raise problem
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve_pair", pair)
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve",
+                        lambda *a, **k: single_calls.append(1))
+    response = client.post("/api/fetch-imagery", json={"query": TEMPORAL_QUERY, "aoi_bbox": BBOX})
+
+    assert response.status_code == status and response.json()["code"] == code
+    assert "upload" not in response.json(), "no imagery is registered on failure"
+    assert single_calls == [], "no fallback to one scene"
+
+
+def test_an_unsupported_period_is_refused_before_any_api_call(client, monkeypatch):
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve_pair",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no API call")))
+    response = client.post("/api/fetch-imagery", json={"query": "What changed since 2012?", "aoi_bbox": BBOX})
+
+    assert response.status_code == 422 and response.json()["code"] == "temporal_range_unsupported"
+    assert "Sentinel-2" in response.json()["message"]
+
+
+def test_a_too_large_area_is_still_refused_for_a_temporal_question(client, monkeypatch):
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    response = client.post("/api/fetch-imagery", json={"query": TEMPORAL_QUERY, "aoi_bbox": [60, 10, 80, 30]})
+    assert response.status_code == 413 and response.json()["code"] == "aoi_too_large"
+
+
+def test_missing_credentials_are_still_reported_for_a_temporal_question(client, monkeypatch):
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "")
+    response = client.post("/api/fetch-imagery", json={"query": TEMPORAL_QUERY, "aoi_bbox": BBOX})
+    assert response.status_code == 503 and response.json()["code"] == "credentials_missing"
+
+
+def test_a_repeated_temporal_request_is_served_from_its_own_cache(client, fake_pair):
+    payload = {"query": TEMPORAL_QUERY, "aoi_bbox": BBOX}
+    first = client.post("/api/fetch-imagery", json=payload).json()
+    second = client.post("/api/fetch-imagery", json=payload).json()
+
+    assert len(fake_pair) == 1, "the second identical request downloads nothing"
+    assert first["cached"] is False and second["cached"] is True
+    assert [i["metadata"]["acquired"] for i in second["images"]] == ["2026-07-05", "2026-09-19"]
+
+
+def test_a_single_date_cache_entry_is_never_returned_for_a_temporal_request(client, monkeypatch, fake_pair, write_tiff, scene):
+    from satquery.providers import RetrievedScene
+
+    source = write_tiff("single.tif", scene, ["blue", "green", "red", "nir"])
+
+    def retrieve(self, bbox, bands, destination, **kwargs):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(Path(source).read_bytes())
+        return RetrievedScene(path=destination, metadata=_scene_metadata("2026-09-19", 0.02, "S2B", bbox))
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", retrieve)
+    client.post("/api/fetch-imagery", json={"query": "Are there water bodies here?", "aoi_bbox": BBOX})
+    temporal = client.post("/api/fetch-imagery", json={"query": TEMPORAL_QUERY, "aoi_bbox": BBOX}).json()
+
+    assert len(fake_pair) == 1, "the temporal request did its own retrieval"
+    assert temporal["mode"] == "temporal" and len(temporal["images"]) == 2
