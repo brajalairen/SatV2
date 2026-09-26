@@ -756,3 +756,163 @@ def test_a_single_date_cache_entry_is_never_returned_for_a_temporal_request(clie
 
     assert len(fake_pair) == 1, "the temporal request did its own retrieval"
     assert temporal["mode"] == "temporal" and len(temporal["images"]) == 2
+
+
+# --------------------------------------------------------------------- optical + SAR uploads
+
+def _upload_undeclared(client, path):
+    """As the web client uploads: no modality, so the server reads it from the file."""
+    with open(path, "rb") as handle:
+        response = client.post("/api/uploads", files={"file": (Path(path).name, handle, "image/tiff")})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.fixture
+def optical_sar_pair(write_tiff, optical_scene, sar_scene):
+    """Two rasters on one grid, each naming its bands as real Sentinel exports do."""
+    return (write_tiff("s2.tif", optical_scene, band_names=["B02", "B03", "B04", "B08"]),
+            write_tiff("s1.tif", sar_scene, band_names=["VV", "VH"]))
+
+
+def test_an_undeclared_upload_takes_its_modality_from_its_band_descriptions(client, optical_sar_pair, write_tiff, scene):
+    optical, sar = (_upload_undeclared(client, path) for path in optical_sar_pair)
+    unnamed = _upload_undeclared(client, write_tiff("unnamed.tif", scene))
+
+    assert (sar["modality"], sar["modality_basis"]) == ("sar", "from band descriptions VV, VH")
+    assert optical["modality"] == "optical" and "B02" in optical["modality_basis"]
+    assert unnamed["modality"] == "optical" and unnamed["modality_basis"].startswith("assumed")
+
+
+def test_a_declared_modality_still_wins(client, optical_sar_pair):
+    body = _upload(client, optical_sar_pair[1], modality="optical")
+    assert body["modality"] == "optical" and body["modality_basis"] == "declared at upload"
+
+
+def test_an_uploaded_optical_sar_pair_is_analysed_jointly_with_pinned_fused_layers(client, optical_sar_pair):
+    optical, sar = (_upload_undeclared(client, path) for path in optical_sar_pair)
+    body = client.post("/api/analyze", json={
+        "query": "Use the optical and SAR images together to identify built-up and water-covered regions.",
+        "images": [{"upload_id": optical["id"]}, {"upload_id": sar["id"]}]}).json()
+    response = body["response"]
+
+    assert response["status"] == "ok" and response["task"] == "cross_modal_analysis"
+    assert [s["tool"] for s in response["trace"]["steps"]] == [
+        "optical.spectral_indices", "sar.water_mask", "sar.bright_mask", "fusion.cross_modal"]
+    assert [i["modality"] for i in response["trace"]["images"]] == ["optical", "sar"]
+    layers = body["overlay_layers"]
+    assert [layer["label"].split(":")[0] for layer in layers] == ["FUSED water", "FUSED built-up"]
+    for layer in layers:
+        assert layer["corners_wgs84"] == optical["summary"]["corners_wgs84"]
+        image = client.get(layer["url"])
+        assert image.status_code == 200 and image.headers["content-type"] == "image/png"
+
+
+def test_two_undeclared_uploads_of_one_modality_are_refused_not_compared_as_dates(client, write_tiff, scene):
+    first = _upload_undeclared(client, write_tiff("a.tif", scene))
+    second = _upload_undeclared(client, write_tiff("b.tif", scene))
+    response = client.post("/api/analyze", json={
+        "query": "Compare optical and SAR evidence to find water.",
+        "images": [{"upload_id": first["id"]}, {"upload_id": second["id"]}]}).json()["response"]
+
+    assert response["status"] == "invalid_input" and response["task"] is None
+    assert {v["code"] for v in response["trace"]["validation"]} >= {"missing_sar"}
+
+
+# ------------------------------------------------------------- optical + SAR retrieval (Sentinel-2 + Sentinel-1)
+
+CROSS_MODAL_QUERY = "Use the optical and SAR images together to identify built-up and water-covered regions."
+
+
+@pytest.fixture
+def fake_optical_sar(monkeypatch, optical_sar_pair):
+    """Replace only the network: a real optical and a real SAR raster on one grid, as retrieve_optical_sar writes them."""
+    from dataclasses import replace
+
+    from satquery.providers import RetrievedScene
+
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    calls = []
+
+    def retrieve_optical_sar(self, bbox, bands, destination_dir, **kwargs):
+        calls.append({"bbox": bbox, "bands": bands})
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        optical_meta = _scene_metadata("2026-09-14", 3.0, "S2B_MSIL2A_20260914", bbox)
+        sar_meta = replace(optical_meta, collection="sentinel-1-grd", satellite="Sentinel-1D", product_level="GRD",
+                           acquired="2026-09-18", acquired_datetime="2026-09-18T01:02:38Z", cloud_cover=None,
+                           bands=["VV (co-pol)", "VH (cross-pol)"], scene_id="S1D_IW_GRDH_20260918", modality="sar")
+        out = []
+        for role, source, meta in (("optical", optical_sar_pair[0], optical_meta), ("sar", optical_sar_pair[1], sar_meta)):
+            path = destination_dir / f"{role}.tif"
+            path.write_bytes(Path(source).read_bytes())
+            out.append(RetrievedScene(path=path, metadata=meta))
+        return tuple(out)
+
+    def other_mode(*args, **kwargs):  # pragma: no cover - must never run for a joint optical + SAR question
+        raise AssertionError("single-date or temporal retrieval used for an optical + SAR question")
+
+    provider = "satquery.providers.copernicus.CopernicusSentinelProvider"
+    monkeypatch.setattr(f"{provider}.retrieve_optical_sar", retrieve_optical_sar)
+    monkeypatch.setattr(f"{provider}.retrieve", other_mode)
+    monkeypatch.setattr(f"{provider}.retrieve_pair", other_mode)
+    return calls
+
+
+def test_a_joint_question_retrieves_an_optical_and_a_sar_scene(client, fake_optical_sar):
+    response = client.post("/api/fetch-imagery", json={"query": CROSS_MODAL_QUERY, "aoi_bbox": BBOX})
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["mode"] == "cross_modal" and body["temporal"] is None
+    assert [image["role"] for image in body["images"]] == ["optical", "sar"]
+    assert [image["upload"]["modality"] for image in body["images"]] == ["optical", "sar"]
+    optical, sar = (image["metadata"] for image in body["images"])
+    assert (optical["satellite"], sar["satellite"], sar["product_level"]) == ("Sentinel-2", "Sentinel-1D", "GRD")
+    assert sar["cloud_cover"] is None and sar["modality"] == "sar"
+    assert body["cross_modal"]["days_apart"] == 4 and "4 days apart" in body["cross_modal"]["explanation"]
+    assert fake_optical_sar[0]["bbox"] == tuple(BBOX)
+
+
+def test_compare_optical_and_sar_is_not_mistaken_for_a_comparison_of_dates(client, fake_optical_sar):
+    """'Compare ... to' matches the temporal cue too; the joint question must win."""
+    body = client.post("/api/fetch-imagery", json={"query": "Compare optical and SAR evidence to find water.",
+                                                   "aoi_bbox": BBOX}).json()
+    assert body["mode"] == "cross_modal"
+
+
+def test_the_retrieved_pair_runs_the_joint_analysis_and_states_the_date_gap(client, fake_optical_sar):
+    fetched = client.post("/api/fetch-imagery", json={"query": CROSS_MODAL_QUERY, "aoi_bbox": BBOX}).json()
+    images = [{"upload_id": s["upload"]["id"], "modality": s["upload"]["modality"], "acquired": s["upload"]["acquired"]}
+              for s in fetched["images"]]
+    body = client.post("/api/analyze", json={"query": CROSS_MODAL_QUERY, "images": images}).json()
+    response = body["response"]
+
+    assert response["status"] == "ok" and response["task"] == "cross_modal_analysis"
+    assert "fusion.cross_modal" in [s["tool"] for s in response["trace"]["steps"]]
+    assert "acquisition_gap" in {v["code"] for v in response["trace"]["validation"]}
+    assert "2026-09-14" in response["answer"] and "2026-09-18" in response["answer"]
+    assert len(body["overlay_layers"]) == 2
+
+
+def test_a_repeated_joint_request_is_served_from_its_own_cache(client, fake_optical_sar):
+    payload = {"query": CROSS_MODAL_QUERY, "aoi_bbox": BBOX}
+    first = client.post("/api/fetch-imagery", json=payload).json()
+    second = client.post("/api/fetch-imagery", json=payload).json()
+    assert len(fake_optical_sar) == 1, "the second identical request must not hit the API again"
+    assert (first["cached"], second["cached"]) == (False, True)
+    assert [s["metadata"]["scene_id"] for s in first["images"]] == [s["metadata"]["scene_id"] for s in second["images"]]
+
+
+def test_no_sar_scene_is_a_structured_failure_never_an_optical_only_answer(client, monkeypatch):
+    from satquery.providers.errors import NoSarImagery
+
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+
+    def no_sar(self, *args, **kwargs):
+        raise NoSarImagery("No Sentinel-1 dual-polarisation (VV+VH) scene of this area was found.")
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve_optical_sar", no_sar)
+    response = client.post("/api/fetch-imagery", json={"query": CROSS_MODAL_QUERY, "aoi_bbox": BBOX})
+    assert response.status_code == 404 and response.json()["code"] == "no_sar_imagery"

@@ -153,23 +153,116 @@ def _change(intent, r, ctx, run_dir):
     return answer, confidence, [on_map, _overlay_evidence(array, run_dir, "change", label, primary.step_id)]
 
 
+# Per fused class: the words used in the answer, and the map colours (both sensors, optical only, SAR only).
+# Confirmed evidence is drawn strongly and one-sensor evidence faintly: disagreement stays visible, but a
+# broad single-sensor proxy (e.g. bare desert in the optical built-up proxy) cannot drown the fused result.
+CONFIRMED_ALPHA, SINGLE_SENSOR_ALPHA = 210, 75
+FUSED_CLASSES = {
+    "water": {"noun": "water-covered regions", "short": "water",
+              "colors": (("both", "blue", CONFIRMED_ALPHA), ("optical_only", "cyan", SINGLE_SENSOR_ALPHA),
+                         ("sar_only", "violet", SINGLE_SENSOR_ALPHA)),
+              "legend": "solid blue = optical and SAR agree; faint cyan = optical only, faint violet = SAR only"},
+    "built_up": {"noun": "built-up candidates", "short": "built-up",
+                 "colors": (("both", "red", CONFIRMED_ALPHA), ("optical_only", "orange", SINGLE_SENSOR_ALPHA),
+                            ("sar_only", "yellow", SINGLE_SENSOR_ALPHA)),
+                 "legend": "solid red = optical and SAR agree; faint orange = optical only, faint yellow = SAR only "
+                           "(proxies, heuristic)"},
+}
+
+
+def _pct1(percent: float) -> str:
+    return f"{percent:.1f}%"
+
+
+def _optical_source(step: StepResult | None, mask_key: str) -> str:
+    """What the optical mask measures, from the step and parameters that produced it."""
+    if step is None:
+        return "optical evidence"
+    if step.tool == "optical.spectral_indices" and mask_key == "water":
+        return f"water by NDWI > {step.params.get('ndwi_water_threshold', 0.0):g} (spectral index)"
+    if step.tool == "optical.spectral_indices" and mask_key == "built_up_proxy":
+        return (f"built-up proxy by NDVI < {step.params.get('ndvi_bare_threshold', 0.2):g} and NDWI < "
+                f"{step.params.get('ndwi_water_threshold', 0.0):g} (heuristic; also includes bare soil)")
+    return f"{step.params.get('target', 'target')} by VLM segmentation ({step.model})"
+
+
+def _sar_source(step: StepResult | None) -> str:
+    if step is None:
+        return "SAR evidence"
+    o = step.outputs
+    unit = "dB" if str(o.get("units", "")).startswith(("dB", "linear")) else "(8-bit display units)"
+    if step.tool == "sar.water_mask":
+        return f"low backscatter below an adaptive Otsu threshold of {o.get('threshold_db', float('nan')):.1f} {unit} (heuristic)"
+    share = 100 - float(step.params.get("percentile", 90))
+    return (f"strong scatterers, the brightest {share:g}% of co-pol backscatter (a relative threshold, so it flags "
+            f"about that share of any scene; a built-up proxy, not a building detector)")
+
+
 def _cross_modal(intent, r, ctx, run_dir):
+    """Optical evidence, SAR evidence and the fused conclusion, each attributed to what produced it."""
     fusion = r.get("fusion.cross_modal")
     if not fusion:
         return "", None, []
-    optical = 0 if ctx.images[0].modality == "optical" else 1
-    parts = []
-    for key, label in (("water", "Water"), ("built_up", "Built-up")):
-        o = fusion.outputs.get(key, {})
-        if o.get("available", True) and "sar_percent" in o:
-            agreement = f"{o['agreement_iou']:.2f}" if o["agreement_iou"] is not None else "n/a"
-            parts.append(f"{label}: optical {o['optical_percent']}%, SAR {o['sar_percent']}%, confirmed by both "
-                         f"{o['both_percent']}% (agreement IoU {agreement}), mainly in the {_places(o['regions'])}.")
-    if not parts:
+    optical, sar = (0, 1) if ctx.images[0].modality == "optical" else (1, 0)
+    steps = {s.step_id: s for s in r.results}
+    fused = {name: o for name, o in fusion.outputs.items() if o.get("available", True) and name in FUSED_CLASSES}
+    if not fused:
         return "", None, []
+
+    summary, optical_parts, sar_parts, joint_parts, caveats = [], [], [], [], []
+    for name, o in fused.items():
+        words = FUSED_CLASSES[name]
+        places = _places(o["both_regions"])
+        if o["both_percent"] > 0:
+            summary.append(f"{words['noun']} are confirmed by both sensors over {_pct1(o['both_percent'])} of the analysed "
+                           f"area, mainly in the {places}")
+        elif o["optical_percent"] or o["sar_percent"]:
+            summary.append(f"no {words['short']} is confirmed by both sensors (optical {_pct1(o['optical_percent'])}, "
+                           f"SAR {_pct1(o['sar_percent'])})")
+        else:
+            summary.append(f"neither sensor detected {words['noun']}")
+        optical_parts.append(f"{_optical_source(steps.get(o['optical_step']), o['optical_mask'])} covers "
+                             f"{_pct1(o['optical_percent'])}")
+        sar_parts.append(f"{_sar_source(steps.get(o['sar_step']))} {'cover' if name == 'built_up' else 'covers'} "
+                         f"{_pct1(o['sar_percent'])}")
+        if o["agreement_iou"] is None:
+            joint_parts.append(f"{words['short']}: nothing to compare")
+            continue
+        joint_parts.append(f"{words['short']} agreement IoU {o['agreement_iou']:.2f} ({o['agreement']}); optical only "
+                           f"{_pct1(o['optical_only_percent'])}, SAR only {_pct1(o['sar_only_percent'])}")
+        if o["agreement"] != "high":
+            caveats.append(f"Optical and SAR evidence show {o['agreement']} agreement for {words['short']} "
+                           f"(IoU {o['agreement_iou']:.2f}), so the {words['short']} interpretation has lower confidence.")
+    for name, o in fusion.outputs.items():
+        if not o.get("available", True):
+            caveats.append(f"{FUSED_CLASSES.get(name, {}).get('short', name).capitalize()} could not be fused: {o['reason']}.")
+    dates = (ctx.images[optical].acquired, ctx.images[sar].acquired)
+    if all(dates) and dates[0] != dates[1]:
+        caveats.append(f"The optical image was acquired on {dates[0]} and the SAR image on {dates[1]}; anything "
+                       "that changed in between appears as disagreement between the sensors.")
+    if intent.target and intent.target not in ("water", "building"):
+        caveats.append(f"The cross-modal tools analyse water and built-up surfaces only; '{intent.target}' was not analysed.")
+
+    answer = "\n".join([
+        "Using the optical and SAR images together, " + "; ".join(summary) + ".",
+        f"Optical evidence ({ctx.images[optical].name}): " + "; ".join(optical_parts) + ".",
+        f"SAR evidence ({ctx.images[sar].name}): " + "; ".join(sar_parts) + ".",
+        "Cross-modal evidence: " + "; ".join(joint_parts) + ".",
+        *caveats,
+    ])
+
     art = ctx.artifacts[fusion.step_id].masks
-    masks = [(art.get("water_optical_only"), "cyan"), (art.get("water_sar_only"), "cyan"), (art.get("water_both"), "blue"),
-             (art.get("built_up_optical_only"), "orange"), (art.get("built_up_sar_only"), "orange"), (art.get("built_up_both"), "red")]
-    array = ev.side_by_side(ev.overlay(ctx.rgb(optical), masks=masks), ctx.rgb(1 - optical))
-    label = "optical with fused masks (blue/red: both sensors agree; cyan/orange: one sensor) | SAR false colour"
-    return " ".join(parts), fusion.confidence, [_overlay_evidence(array, run_dir, "cross_modal", label, fusion.step_id)]
+    colored = lambda name: [(art.get(f"{name}_{part}"), color, alpha)
+                            for part, color, alpha in FUSED_CLASSES[name]["colors"]]
+    shape = (ctx.images[optical].height, ctx.images[optical].width)
+    # One transparent layer per class, pinned to the pair's shared grid: the map shows it over either
+    # input, and the colours say which sensor saw what.
+    layers = [_overlay_evidence(ev.mask_layer(shape, colored(name)), run_dir, f"fused_{name}",
+                                f"FUSED {FUSED_CLASSES[name]['short']}: {FUSED_CLASSES[name]['legend']}",
+                                fusion.step_id, optical)
+              for name in fused]
+    all_masks = [(mask, color) for name in fused for mask, color, _ in colored(name)]
+    composite = ev.side_by_side(ev.overlay(ctx.rgb(optical), masks=all_masks), ev.overlay(ctx.rgb(sar), masks=all_masks))
+    label = ("optical (left) and SAR false colour (right) with the fused masks: "
+             + "; ".join(f"{FUSED_CLASSES[name]['short']}: {FUSED_CLASSES[name]['legend']}" for name in fused))
+    return answer, fusion.confidence, layers + [_overlay_evidence(composite, run_dir, "cross_modal", label, fusion.step_id)]

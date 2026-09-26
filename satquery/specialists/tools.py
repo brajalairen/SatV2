@@ -98,10 +98,17 @@ class CompareParams(Params):
 
 
 class FusionParams(Params):
-    sar_water_step: str
-    sar_bright_step: str
-    optical_water_step: str
-    optical_building_step: str
+    """A class is fused only when both of its steps are given, so the plan fuses what the query asked about.
+
+    The `*_key` fields name which mask of the optical step is the evidence (e.g. "water" or
+    "built_up_proxy" of optical.spectral_indices); unset, it is "water"/"mask" as before.
+    """
+    sar_water_step: str | None = None
+    optical_water_step: str | None = None
+    optical_water_key: str | None = Field(None, pattern=r"^[a-z_]+$")
+    sar_bright_step: str | None = None
+    optical_building_step: str | None = None
+    optical_building_key: str | None = Field(None, pattern=r"^[a-z_]+$")
 
 
 @dataclass(frozen=True)
@@ -252,32 +259,65 @@ def compare_areas(ctx, idx, p: CompareParams, step_id):
                                                           value=outputs["change_percentage_points"], source_step=step_id)])
 
 
+AGREEMENT_LEVELS = {"high": 0.5, "moderate": 0.25}  # heuristic IoU cut-offs, reported with every level
+
+
+def agreement_level(value: float | None) -> str:
+    if value is None:
+        return "none detected"
+    return next((level for level, floor in AGREEMENT_LEVELS.items() if value >= floor), "low")
+
+
 def cross_modal(ctx, idx, p: FusionParams, step_id):
-    get = lambda step, key="mask": ctx.artifacts[step].masks.get(key) if step in ctx.artifacts else None
-    sar_water_mask, sar_bright_mask = get(p.sar_water_step), get(p.sar_bright_step)
-    optical_water, optical_building = get(p.optical_water_step, "water"), get(p.optical_building_step)
-    if optical_water is None:
-        optical_water = get(p.optical_water_step)
-    masks, outputs, agreements = {}, {}, []
+    """Per class: where optical and SAR evidence agree, where only one sensor sees it, and their IoU.
+
+    idx = [optical, sar]. Both masks are restricted to pixels valid in both images, so nodata in one
+    sensor never counts as disagreement.
+    """
     valid = ctx.valid(*idx)
-    for name, sar_mask, optical_mask in (("water", sar_water_mask, optical_water), ("built_up", sar_bright_mask, optical_building)):
-        if sar_mask is None or optical_mask is None:
-            outputs[name] = {"available": False}
+    percent = lambda mask: round(float(ra.coverage(mask, valid)) * 100, 2)
+    masks, outputs, evidence, agreements = {}, {}, [], []
+    classes = (("water", p.optical_water_step, p.optical_water_key or "water", p.sar_water_step),
+               ("built_up", p.optical_building_step, p.optical_building_key or "mask", p.sar_bright_step))
+    for name, optical_step, optical_key, sar_step in classes:
+        if optical_step is None and sar_step is None:
+            continue  # not asked about
+        missing = [s for s in (optical_step, sar_step) if s is None or s not in ctx.artifacts]
+        if missing:
+            outputs[name] = {"available": False, "reason": f"evidence step(s) {', '.join(map(str, missing))} did not run"}
             continue
+        optical_masks = ctx.artifacts[optical_step].masks
+        optical_mask = optical_masks.get(optical_key, optical_masks.get("mask"))
+        sar_mask = ctx.artifacts[sar_step].masks.get("mask")
+        if optical_mask is None or sar_mask is None:
+            outputs[name] = {"available": False, "reason": "an evidence step produced no mask"}
+            continue
+        optical_mask, sar_mask = optical_mask & valid, sar_mask & valid
+        both = optical_mask & sar_mask
+        masks |= {f"{name}_both": both, f"{name}_optical_only": optical_mask & ~sar_mask,
+                  f"{name}_sar_only": sar_mask & ~optical_mask}
         agreement = ra.iou(sar_mask, optical_mask)
-        masks[f"{name}_both"] = sar_mask & optical_mask
-        masks[f"{name}_sar_only"] = sar_mask & ~optical_mask
-        masks[f"{name}_optical_only"] = optical_mask & ~sar_mask
-        percent = lambda mask: round(ra.coverage(mask, valid) * 100, 2)
-        outputs[name] = {"sar_percent": percent(sar_mask), "optical_percent": percent(optical_mask),
-                         "both_percent": percent(masks[f"{name}_both"]), "agreement_iou": agreement,
-                         "regions": ra.regions(sar_mask | optical_mask, 3, valid=valid)}
+        outputs[name] = {
+            "optical_step": optical_step, "optical_mask": optical_key if optical_key in optical_masks else "mask",
+            "sar_step": sar_step,
+            "optical_percent": percent(optical_mask), "sar_percent": percent(sar_mask), "both_percent": percent(both),
+            "optical_only_percent": percent(masks[f"{name}_optical_only"]),
+            "sar_only_percent": percent(masks[f"{name}_sar_only"]),
+            "agreement_iou": round(agreement, 3) if agreement is not None else None,
+            "agreement": agreement_level(agreement), "agreement_levels_iou": AGREEMENT_LEVELS,
+            "regions": ra.regions(sar_mask | optical_mask, 3, valid=valid),
+            "both_regions": ra.regions(both, 3, valid=valid),
+        }
         if agreement is not None:
             agreements.append(agreement)
+        evidence += [Evidence(kind="mask", label=f"{name} confirmed by optical and SAR", image_index=idx[0],
+                              fraction=round(float(ra.coverage(both, valid)), 4), source_step=step_id),
+                     Evidence(kind="metric", label=f"{name} optical-SAR agreement IoU", value=outputs[name]["agreement_iou"],
+                              source_step=step_id)]
+    fused = [name for name, o in outputs.items() if o.get("available", True)]
     confidence = Confidence(value=round(float(np.mean(agreements)), 3) if agreements else None,
-                            method="mean optical-SAR agreement IoU (heuristic)")
-    evidence = [Evidence(kind="metric", label=f"{name} optical-SAR agreement IoU", value=o.get("agreement_iou"), source_step=step_id)
-                for name, o in outputs.items() if o.get("available", True)]
+                            method=f"mean optical-SAR agreement IoU over {', '.join(fused) or 'no class'} (heuristic)",
+                            note=None if agreements else "neither sensor detected any of the requested classes")
     return ToolOutput(outputs=outputs, evidence=evidence, confidence=confidence, masks=masks)
 
 

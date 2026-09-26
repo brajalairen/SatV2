@@ -33,7 +33,9 @@ export function SceneProvenance() {
 
   return (
     <section className="rounded-[var(--radius-md)] border border-line bg-surface px-3 py-2.5">
-      {scenes.length === 2 ? (
+      {scenes.length === 2 && (scenes[0]!.modality ?? "optical") !== (scenes[1]!.modality ?? "optical") ? (
+        <SensorPair optical={scenes[0]!} sar={scenes[1]!} />
+      ) : scenes.length === 2 ? (
         <Comparison before={scenes[0]!} after={scenes[1]!} />
       ) : (
         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
@@ -45,12 +47,42 @@ export function SceneProvenance() {
       )}
 
       <p className="mt-2 border-t border-line pt-2 text-[10px] leading-relaxed text-faint">
-        {latest.provider} · {latest.resolution_m} m · {latest.crs} · {latest.bands.join(", ")}
+        {latest.provider} · {latest.resolution_m} m · {latest.crs} ·{" "}
+        {[...new Set(scenes.flatMap((scene) => scene.bands))].join(", ")}
         {scenes.every((scene) => scene.cached) ? " · from cache" : ""}
         <br />
         {latest.attribution}
       </p>
     </section>
+  );
+}
+
+/** An optical scene and the SAR scene paired with it: two sensors, not two moments, so no before/after. */
+function SensorPair({ optical, sar }: { optical: SceneMetadata; sar: SceneMetadata }) {
+  const days = Math.abs(daysBetween(optical.acquired, sar.acquired));
+  const rows: [string, string, string][] = [
+    ["Source", `${optical.satellite} ${optical.product_level}`, `${sar.satellite} ${sar.product_level}`],
+    ["Acquired", optical.acquired || "unknown", sar.acquired || "unknown"],
+    ["Cloud cover", cloudText(optical), "n/a (radar)"],
+  ];
+  return (
+    <>
+      <dl className="grid grid-cols-[auto_1fr_1fr] items-baseline gap-x-3 gap-y-1">
+        <span />
+        <span className="text-[10px] font-semibold tracking-wide text-muted uppercase">Optical</span>
+        <span className="text-[10px] font-semibold tracking-wide text-muted uppercase">SAR</span>
+        {rows.map(([label, first, second]) => (
+          <div key={label} className="contents">
+            <dt className="text-[10px] font-medium tracking-wide text-faint uppercase">{label}</dt>
+            <dd className="truncate text-[12px] text-ink" title={label === "Acquired" ? optical.scene_id ?? first : first}>{first}</dd>
+            <dd className="truncate text-[12px] text-ink" title={label === "Acquired" ? sar.scene_id ?? second : second}>{second}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-1.5 text-[11px] text-muted">
+        Two sensors on one pixel grid, acquired {days} day{days === 1 ? "" : "s"} apart · selected area
+      </p>
+    </>
   );
 }
 

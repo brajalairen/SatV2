@@ -9,6 +9,7 @@ Otherwise the names below are ASSUMED, `band_names_assumed` is set, and validati
 """
 
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +31,44 @@ BAND_ALIASES = {
     "copol": ("copol", "vv", "hh"),
     "crosspol": ("crosspol", "vh", "hv"),
 }
+
+
+SAR_ROLES = ("copol", "crosspol")
+OPTICAL_ROLES = ("red", "green", "blue", "nir", "pan")
+SENTINEL2_BAND = re.compile(r"^b(?:0?[1-9]|1[0-2]|8a)$")
+
+
+def modality_from_band_names(names: list[str]) -> str | None:
+    """"sar" or "optical" when every band name identifies that modality, else None.
+
+    Only descriptions stored in the file count: this never guesses from pixel values, which cannot
+    tell SAR linear intensity from a single optical band.
+    """
+    lowered = [name.strip().lower() for name in names if name and name.strip()]
+    if not lowered or len(lowered) != len(names):
+        return None
+    sar = {alias for role in SAR_ROLES for alias in BAND_ALIASES[role]}
+    optical = {alias for role in OPTICAL_ROLES for alias in BAND_ALIASES[role]}
+    if all(name in sar for name in lowered):
+        return "sar"
+    if all(name in optical or SENTINEL2_BAND.match(name) for name in lowered):
+        return "optical"
+    return None
+
+
+def detect_modality(path: str | Path) -> tuple[str | None, list[str]]:
+    """The modality a raster's own band descriptions state, and those descriptions.
+
+    (None, []) for PNG/JPEG and for TIFFs without a full set of descriptions.
+    """
+    path = Path(path)
+    if path.suffix.lower() not in RASTER_SUFFIXES:
+        return None, []
+    import rasterio
+
+    with rasterio.open(path) as src:
+        descriptions = [d or "" for d in src.descriptions]
+    return modality_from_band_names(descriptions), [d.strip() for d in descriptions if d]
 
 
 @dataclass

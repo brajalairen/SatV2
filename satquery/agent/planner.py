@@ -1,5 +1,6 @@
 """Plan templates keyed by (input configuration, intent). A plan is data, so it appears verbatim in the trace."""
 
+from satquery.agent.intents import cross_modal_classes
 from satquery.imaging import RasterImage
 from satquery.schemas import InputConfig, Intent, PlanStep
 
@@ -23,7 +24,7 @@ def build_plan(intent: Intent, config: InputConfig, images: list[RasterImage], q
     elif config == "pair_bitemporal":
         _bitemporal(plan, intent, images)
     elif config == "pair_cross_modal":
-        _cross_modal(plan, images)
+        _cross_modal(plan, images, query)
     return plan.steps
 
 
@@ -89,16 +90,37 @@ def _bitemporal(plan, intent, images):
              target=intent.target, before_step=before, after_step=after, mask_key=mask_key)
 
 
-def _cross_modal(plan, images):
+def _cross_modal(plan, images, query):
+    """Optical evidence, then SAR evidence, for each class the query asks about; then fusion.
+
+    Optical side, as in `_bitemporal`: multispectral input uses spectral indices, because the VLM
+    was trained on sub-metre imagery and finds no buildings at ~10 m (measured on the BigEarthNet
+    demo pairs, 2026-09-27); RGB or panchromatic input uses VLM segmentation.
+    """
     optical = 0 if images[0].modality == "optical" else 1
     sar = 1 - optical
-    sar_water = plan.add("sar.water_mask", [sar], "water from SAR (dark, specular)")
-    sar_bright = plan.add("sar.bright_mask", [sar], "built-up candidates from SAR (strong scatterers)")
+    classes = cross_modal_classes(query)
+    refs = {}
     if _has_nir(images[optical]):
-        optical_water = plan.add("optical.spectral_indices", [optical], "water from optical NDWI")
+        spectral = plan.add("optical.spectral_indices", [optical],
+                            "optical evidence: " + " and ".join(
+                                {"water": "water (NDWI)", "building": "built-up proxy (low NDVI and NDWI)"}[c]
+                                for c in classes))
+        if "water" in classes:
+            refs |= {"optical_water_step": spectral, "optical_water_key": "water"}
+        if "building" in classes:
+            refs |= {"optical_building_step": spectral, "optical_building_key": "built_up_proxy"}
     else:
-        optical_water = plan.add("vlm.segment", [optical], "water from optical imagery", target="water")
-    optical_building = plan.add("vlm.segment", [optical], "buildings from optical imagery", target="building")
-    plan.add("fusion.cross_modal", [optical, sar], "combine complementary optical and SAR evidence",
-             sar_water_step=sar_water, sar_bright_step=sar_bright,
-             optical_water_step=optical_water, optical_building_step=optical_building)
+        if "water" in classes:
+            refs["optical_water_step"] = plan.add("vlm.segment", [optical], "optical evidence: water (VLM segmentation)",
+                                                  target="water")
+        if "building" in classes:
+            refs["optical_building_step"] = plan.add("vlm.segment", [optical],
+                                                     "optical evidence: buildings (VLM segmentation)", target="building")
+    if "water" in classes:
+        refs["sar_water_step"] = plan.add("sar.water_mask", [sar], "SAR evidence: low backscatter (water-like, specular)")
+    if "building" in classes:
+        refs["sar_bright_step"] = plan.add("sar.bright_mask", [sar],
+                                           "SAR evidence: strong scatterers (built-up proxy, e.g. double bounce)")
+    plan.add("fusion.cross_modal", [optical, sar], "fuse optical and SAR evidence per class: agreement, "
+             "confirmed by both, one sensor only", **refs)

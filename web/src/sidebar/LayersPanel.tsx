@@ -50,7 +50,7 @@ export function LayersPanel() {
 
       <SectionGroup
         title="Imagery search"
-        note="Not connected in this build. Retrieval always uses Sentinel-2 L2A, the most recent scene under the cloud limit."
+        note="Not connected in this build. Retrieval uses Sentinel-2 L2A, the least cloudy recent scene under the cloud limit, plus the closest Sentinel-1 GRD scene for a joint optical + SAR question."
       >
         <div className="space-y-3 opacity-60">
           <DisabledField label="Satellite / source" value="Any source" />
@@ -175,6 +175,13 @@ function LayerRow({
           />
         </Tooltip>
       </div>
+      {/* How the modality was decided, until the user changes it: it decides whether two images are
+          compared across dates or across sensors. */}
+      {layer.modality_basis && layer.modality === layer.summary.modality && (
+        <p className="mt-1.5 text-[11px] leading-relaxed text-faint">
+          {layer.modality === "sar" ? "SAR" : "Optical"} {layer.modality_basis}.
+        </p>
+      )}
 
       {layer.mappable && (
         <div className="mt-2.5 flex items-center gap-2">

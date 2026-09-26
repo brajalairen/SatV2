@@ -56,7 +56,8 @@ export function ResultOverlay() {
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-1">
             {view === "answer" ? (
               <>
-                <p className="text-[13px] leading-relaxed text-ink">{response.answer}</p>
+                {/* pre-line: a cross-modal answer puts optical, SAR and fused evidence on lines of their own. */}
+                <p className="text-[13px] leading-relaxed whitespace-pre-line text-ink">{response.answer}</p>
                 <AreaLine />
                 {response.confidence && <ConfidenceLine />}
                 {/* Renders only when the imagery was fetched rather than uploaded. */}

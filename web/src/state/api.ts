@@ -67,10 +67,12 @@ export const api = {
 
   loadExample: (index: number) => request<UploadInfo[]>(`/api/examples/${index}/load`, { method: "POST" }),
 
-  upload: (file: File, modality: Modality, acquired?: string | null) => {
+  /** Without a modality the server reads it from the file's band descriptions (VV/VH -> SAR), and
+   *  says how it decided; a SAR file sent as "optical" would otherwise pair up as a date comparison. */
+  upload: (file: File, modality?: Modality | null, acquired?: string | null) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("modality", modality);
+    if (modality) form.append("modality", modality);
     if (acquired) form.append("acquired", acquired);
     return request<UploadInfo>("/api/uploads", { method: "POST", body: form });
   },

@@ -2,7 +2,8 @@
 
 import pytest
 
-from satquery.agent.intents import COMPATIBLE_TASKS, classify, needs_multiple_dates
+from satquery.agent.intents import (COMPATIBLE_TASKS, classify, cross_modal_classes, needs_multiple_dates,
+                                    needs_optical_and_sar)
 
 CASES = [
     # (query, input configuration, expected task, expected target, comparative)
@@ -98,3 +99,57 @@ def test_a_single_image_can_never_be_routed_to_change_analysis():
     for config in ("single_optical", "single_sar"):
         assert "change_analysis" not in COMPATIBLE_TASKS[config]
         assert classify("What has changed here?", config).task != "change_analysis"
+
+
+# --------------------------------------------------------------- cross-modal detection
+# A question asking for optical and SAR together must be recognised whatever its wording, so that
+# without both modalities it is refused rather than answered by single-image VQA or change analysis.
+
+@pytest.mark.parametrize("query", [
+    "Use the optical and SAR images together to identify built-up and water-covered regions.",
+    "Compare optical and SAR evidence to find water.",
+    "Using both sensors, identify built-up areas.",
+    "Where are the water-covered and built-up regions using optical and radar information?",
+    "Fuse the multispectral and radar data to map flooding",
+    "Do a cross-modal analysis of this area",
+    "what do Sentinel-1 and Sentinel-2 show together here?",
+    "Combine the NDWI with SAR backscatter to find water",
+])
+def test_cross_modal_queries_are_detected(query):
+    assert needs_optical_and_sar(query) is not None, f"should ask for optical + SAR: {query!r}"
+
+
+@pytest.mark.parametrize("query", [
+    "Describe this radar scene.",
+    "Where is water visible in this SAR image?",
+    "What is the spectral signature of the field?",
+    "Is there a water body in this image?",
+    "Highlight the water body.",
+    "What changed between these two dates?",
+    "Show me the buildings and roads together",
+])
+def test_single_sensor_queries_are_not_cross_modal(query):
+    assert needs_optical_and_sar(query) is None, f"should NOT ask for optical + SAR: {query!r}"
+
+
+def test_the_matched_cross_modal_phrase_is_returned_so_a_refusal_can_quote_it():
+    assert needs_optical_and_sar("Compare optical and SAR evidence to find water.") == "optical and SAR"
+    assert needs_optical_and_sar("Using both sensors, identify built-up areas.") == "both sensors"
+
+
+@pytest.mark.parametrize("query, classes", [
+    ("Use the optical and SAR images together to identify built-up and water-covered regions.", ["water", "building"]),
+    ("Compare optical and SAR evidence to find water.", ["water"]),
+    ("Using both sensors, identify built-up areas.", ["building"]),
+    ("Do a cross-modal analysis of this area", ["water", "building"]),  # names neither: both
+    ("Use optical and SAR to find vegetation", ["water", "building"]),  # unsupported class: both, and the answer says so
+])
+def test_cross_modal_classes_follow_the_query(query, classes):
+    assert cross_modal_classes(query) == classes
+
+
+def test_an_optical_sar_pair_is_always_cross_modal_and_the_rule_says_why():
+    intent = classify("Compare optical and SAR evidence to find water.", "pair_cross_modal")
+    assert intent.task == "cross_modal_analysis"
+    assert "cue 'optical and SAR'" in intent.matched_rule and "classes water" in intent.matched_rule
+    assert classify("Compare optical and SAR evidence to find water.", "single_optical").task != "cross_modal_analysis"

@@ -4,7 +4,7 @@
 import { useRef, useState } from "react";
 import { FileImage, FileText, Image, Layers3, Database } from "lucide-react";
 import { api, ApiError } from "../state/api";
-import { useAppStore } from "../state/useAppStore";
+import { inputsLabel, useAppStore } from "../state/useAppStore";
 import { useMap, fitBounds } from "../map/MapView";
 import { MenuItem, Popover, Spinner, useToast } from "../ui/primitives";
 
@@ -38,7 +38,8 @@ export function UploadMenu({ open, onClose }: { open: boolean; onClose: () => vo
     const uploaded = [];
     for (const file of Array.from(files).slice(0, 2)) {
       try {
-        uploaded.push(await api.upload(file, "optical"));
+        // No modality: the server reads it from the file's own band descriptions (optical otherwise).
+        uploaded.push(await api.upload(file));
       } catch (error) {
         setError(error instanceof ApiError ? error.message : `Could not read ${file.name}.`);
       }
@@ -51,6 +52,7 @@ export function UploadMenu({ open, onClose }: { open: boolean; onClose: () => vo
     if (map && bounds) fitBounds(map, bounds);
     const offMap = uploaded.filter((u) => !u.mappable);
     if (offMap.length) toast(`${offMap[0]!.name} has no georeferencing, so it opens in the image viewer.`);
+    else if (uploaded.some((u) => u.modality === "sar")) toast(`Added ${inputsLabel(uploaded)}.`);
     if (input.current) input.current.value = "";
   };
 

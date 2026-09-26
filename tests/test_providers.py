@@ -502,3 +502,121 @@ def test_the_temporal_cache_key_never_matches_a_single_date_key(provider):
     assert temporal != provider.pair_cache_key(BBOX, BANDS, WINDOWS, max_cloud=50.0), "cloud threshold"
     assert temporal != provider.pair_cache_key((72.91, 19.0, 73.0, 19.1), BANDS, WINDOWS), "AOI"
     assert temporal != provider.pair_cache_key(BBOX, ["B04", "B08"], WINDOWS), "bands"
+
+
+# --------------------------------------------------------------------- 8. optical + SAR (Sentinel-1)
+
+from datetime import date as _day, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
+
+from satquery.providers.copernicus import S1_COLLECTION, SAR_MAX_DAYS_APART, sar_evalscript
+from satquery.providers.errors import NoSarImagery
+
+
+def _s1_feature(scene_id, when, polarization="DV"):
+    return {"id": scene_id, "properties": {"datetime": when, "s1:polarization": polarization,
+                                           "platform": "sentinel-1d", "sar:instrument_mode": "IW"}}
+
+
+class RoutingClient(FakeClient):
+    """Answers by what is asked, not by call order: the two downloads run in parallel threads."""
+
+    def __init__(self, optical_features, sar_features, optical_bytes, sar_bytes):
+        super().__init__([])
+        self.answers = {"sentinel-2-l2a": (optical_features, optical_bytes), S1_COLLECTION: (sar_features, sar_bytes)}
+
+    def post(self, url, data=None, json=None, headers=None):
+        self.calls.append({"url": url, "data": data, "json": json, "headers": headers or {}})
+        if data is not None:
+            return _token_response()
+        if "collections" in json:
+            return FakeResponse(200, {"features": self.answers[json["collections"][0]][0]})
+        return FakeResponse(200, content=self.answers[json["input"]["data"][0]["type"]][1])
+
+
+def test_the_sar_evalscript_requests_vv_and_vh_as_linear_power():
+    script = sar_evalscript()
+    assert '"VV", "VH"' in script and "LINEAR_POWER" in script and "FLOAT32" in script
+
+
+def test_the_sar_search_asks_for_iw_scenes_in_the_window(monkeypatch, provider):
+    client = _wire(monkeypatch, provider, [_token_response(), FakeResponse(200, {"features": []})])
+    provider.search_sar(BBOX, start=_day(2026, 9, 2), end=_day(2026, 9, 26))
+    payload = client.calls[1]["json"]
+    assert payload["collections"] == [S1_COLLECTION]
+    assert payload["datetime"] == "2026-09-02T00:00:00Z/2026-09-26T23:59:59Z"
+    assert payload["filter"] == "\"sar:instrument_mode\" = 'IW'"
+
+
+def test_the_sar_scene_closest_to_the_optical_date_wins(provider):
+    features = [_s1_feature("far", "2026-09-06T01:02:37Z"), _s1_feature("after_4d", "2026-09-18T01:02:38Z"),
+                _s1_feature("before_4d", "2026-09-10T01:00:00Z")]
+    # equal gaps (4 days either side of 09-14): the earlier scene, deterministically
+    assert provider.select_sar_scene(features, _day(2026, 9, 14))["id"] == "before_4d"
+    assert provider.select_sar_scene(features, _day(2026, 9, 17))["id"] == "after_4d"
+
+
+@pytest.mark.parametrize("features", [
+    [],
+    [_s1_feature("single_pol", "2026-09-15T01:00:00Z", polarization="SV")],
+    [_s1_feature("too_far", "2026-08-20T01:00:00Z")],
+])
+def test_no_usable_sar_scene_is_reported_never_an_optical_only_pair(provider, features):
+    with pytest.raises(NoSarImagery) as caught:
+        provider.select_sar_scene(features, _day(2026, 9, 14))
+    assert caught.value.status == 404 and caught.value.code == "no_sar_imagery"
+    assert "upload a co-registered SAR GeoTIFF" in caught.value.message
+
+
+def test_optical_and_sar_are_retrieved_onto_one_grid_with_their_own_provenance(monkeypatch, tmp_path, provider):
+    optical_bytes = _write_scene(tmp_path / "optical_src.tif").read_bytes()
+    sar_bytes = _write_scene(tmp_path / "sar_src.tif", bands=["VV", "VH"]).read_bytes()
+    client = RoutingClient([_feature("S2B_0914", "2026-09-14T05:40:00Z", 3.0)],
+                           [_s1_feature("S1D_0906", "2026-09-06T01:02:37Z"), _s1_feature("S1D_0918", "2026-09-18T01:02:38Z")],
+                           optical_bytes, sar_bytes)
+    monkeypatch.setattr(provider, "_client", lambda: client)
+
+    optical, sar = provider.retrieve_optical_sar(BBOX, BANDS, tmp_path / "pair")
+
+    sar_search = next(c["json"] for c in client.calls if c["json"] and c["json"].get("collections") == [S1_COLLECTION])
+    end = min(_day(2026, 9, 14) + _timedelta(days=SAR_MAX_DAYS_APART), _datetime.now(_timezone.utc).date())
+    assert sar_search["datetime"] == f"2026-09-02T00:00:00Z/{end:%Y-%m-%d}T23:59:59Z", "window around the optical date"
+    renders = {c["json"]["input"]["data"][0]["type"]: c["json"] for c in client.calls if c["json"] and "evalscript" in c["json"]}
+    s1 = renders[S1_COLLECTION]["input"]["data"][0]
+    assert s1["dataFilter"]["timeRange"]["from"].startswith("2026-09-18"), "the SAR scene's own day only"
+    assert s1["dataFilter"]["polarization"] == "DV" and s1["processing"]["orthorectify"] is True
+    assert renders["sentinel-2-l2a"]["output"] == renders[S1_COLLECTION]["output"], "same output grid"
+    assert renders["sentinel-2-l2a"]["input"]["bounds"] == renders[S1_COLLECTION]["input"]["bounds"], "same area"
+
+    assert (optical.metadata.modality, sar.metadata.modality) == ("optical", "sar")
+    assert (sar.metadata.satellite, sar.metadata.product_level, sar.metadata.acquired) == ("Sentinel-1D", "GRD", "2026-09-18")
+    assert sar.metadata.cloud_cover is None and "orthorectified" in sar.metadata.processing
+    assert sar.metadata.scene_id == "S1D_0918" and sar.metadata.alternatives_considered == 2
+    image = load_image(sar.path, modality="sar")  # descriptions written, so the pipeline never guesses
+    assert image.band_names == ["VV", "VH"] and not image.band_names_assumed
+
+
+def test_an_optical_sar_pair_on_different_grids_is_refused_not_resampled(monkeypatch, tmp_path, provider):
+    optical_bytes = _write_scene(tmp_path / "optical_src.tif").read_bytes()
+    other = tmp_path / "sar_src.tif"
+    with rasterio.open(other, "w", driver="GTiff", height=30, width=30, count=2, dtype="float32",
+                       crs="EPSG:4326", transform=from_origin(72.90, 19.10, 0.0001, 0.0001)) as dst:
+        dst.write(np.ones((2, 30, 30), dtype=np.float32))
+    client = RoutingClient([_feature("S2", "2026-09-14T05:40:00Z", 3.0)], [_s1_feature("S1", "2026-09-18T01:02:38Z")],
+                           optical_bytes, other.read_bytes())
+    monkeypatch.setattr(provider, "_client", lambda: client)
+    with pytest.raises(GridsIncompatible):
+        provider.retrieve_optical_sar(BBOX, BANDS, tmp_path / "pair")
+
+
+def test_the_grid_check_can_ignore_band_count_for_a_sensor_pair(tmp_path):
+    optical, sar = _write_scene(tmp_path / "o.tif"), _write_scene(tmp_path / "s.tif", bands=["VV", "VH"])
+    with pytest.raises(GridsIncompatible):
+        check_same_grid(optical, sar)  # a date pair must match band for band
+    check_same_grid(optical, sar, compare_band_count=False)
+
+
+def test_the_optical_sar_cache_key_never_matches_another_mode(provider):
+    key = provider.optical_sar_cache_key(BBOX, BANDS)
+    assert key == provider.optical_sar_cache_key(BBOX, BANDS), "stable"
+    assert key not in (provider.cache_key(BBOX, BANDS), provider.pair_cache_key(BBOX, BANDS, WINDOWS))
+    assert key != provider.optical_sar_cache_key(BBOX, BANDS, max_cloud=5.0)

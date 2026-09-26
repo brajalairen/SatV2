@@ -13,7 +13,7 @@ function Elapsed() {
   return <span className="tabular-nums">{seconds} s</span>;
 }
 import { ArrowUp, Plus, SquareDashed } from "lucide-react";
-import { PROGRESS_LABELS, nextAnalysisSource, useAppStore } from "../state/useAppStore";
+import { PROGRESS_LABELS, inputsLabel, nextAnalysisSource, useAppStore } from "../state/useAppStore";
 import { api } from "../state/api";
 import { Spinner, Surface, cx, IconButton } from "../ui/primitives";
 import { UploadMenu } from "./UploadMenu";
@@ -99,8 +99,9 @@ export function AICommandBar() {
         <Surface className="pointer-events-auto flex max-w-[720px] items-start gap-2.5 px-3 py-2.5">
           <SquareDashed className="mt-0.5 h-4 w-4 shrink-0 text-faint" strokeWidth={1.75} />
           <p className="text-[12px] leading-relaxed text-muted">
-            Area selected. Ask a question and Sentinel-2 imagery will be fetched for it from{" "}
-            <span className="text-ink">Copernicus Data Space</span>, or add your own GeoTIFF with{" "}
+            Area selected. Ask a question and Sentinel-2 imagery (plus Sentinel-1 SAR, if you ask for optical and SAR
+            together) will be fetched for it from <span className="text-ink">Copernicus Data Space</span>, or add your
+            own GeoTIFF with{" "}
             <strong className="font-medium text-ink">+</strong>.
           </p>
         </Surface>
@@ -213,10 +214,8 @@ export function AICommandBar() {
         {ready && (
           <p className="mt-1.5 truncate text-center text-[11px] text-faint">
             {!hasImages
-              ? "Fetching Sentinel-2 imagery for the selected area"
-              : `${aoi ? "Analysing the selected area of " : "Analysing "}${
-                  images.length === 1 ? images[0]!.name : `${images[0]!.name} and ${images[1]!.name}`
-                }`}
+              ? "Fetching Copernicus Sentinel imagery for the selected area"
+              : `${aoi ? "Analysing the selected area of " : "Analysing "}${inputsLabel(images)}`}
           </p>
         )}
       </div>

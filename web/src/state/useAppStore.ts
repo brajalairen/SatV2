@@ -3,7 +3,15 @@
 
 import { create } from "zustand";
 import { api, ApiError } from "./api";
-import type { AnalyzeResult, Modality, OverlayLayer, SceneMetadata, TaskType, UploadInfo } from "./types";
+import type {
+  AnalyzeResult,
+  ExecutionTrace,
+  Modality,
+  OverlayLayer,
+  SceneMetadata,
+  TaskType,
+  UploadInfo,
+} from "./types";
 import { isBasemapId, type BasemapId } from "../map/basemap";
 
 /** Area-enclosing shapes only: a point cannot restrict an analysis (D-025). */
@@ -33,7 +41,7 @@ export interface Aoi {
 }
 
 /** What the app is doing while `pending` is true, so the user sees the real step, not one spinner. */
-export type ProgressStage = "searching" | "preparing" | "comparing" | "analysing" | "analysing-change";
+export type ProgressStage = "searching" | "preparing" | "comparing" | "pairing" | "analysing" | "analysing-change";
 
 /** Each label names a step that is really running. The earlier and later scenes of a comparison are
  *  found and downloaded together inside one server request, so they share one honest label rather
@@ -42,6 +50,7 @@ export const PROGRESS_LABELS: Record<ProgressStage, string> = {
   searching: "Finding suitable satellite imagery",
   preparing: "Preparing Sentinel-2 imagery",
   comparing: "Preparing imagery for comparison",
+  pairing: "Preparing optical and SAR imagery",
   analysing: "Analysing the selected area",
   "analysing-change": "Analysing changes",
 };
@@ -361,9 +370,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (controller.signal.aborted) return;
 
         comparing = fetched.mode === "temporal";
-        stage = comparing ? "comparing" : "preparing";
+        stage = comparing ? "comparing" : fetched.mode === "cross_modal" ? "pairing" : "preparing";
         set({ stage });
         // Oldest first: the existing bi-temporal analysis reads image 1 as "before", image 2 as "after".
+        // A sensor pair is optical then SAR, each upload carrying its modality; order does not matter there.
         scenes = fetched.images.map((scene) => scene.metadata);
         images = fetched.images.map(({ upload }) => ({
           upload_id: upload.id,
@@ -469,6 +479,25 @@ export function visibleOverlays(state: AppState): OverlayLayer[] {
 
 export function layerLabel(modality: Modality): string {
   return modality === "sar" ? "SAR" : "Optical";
+}
+
+/** "a.tif (optical) and b.tif (SAR)": which images a question runs on, and as what. The modality
+ *  decides the route (two optical images are a date comparison; optical + SAR is a joint analysis),
+ *  so it is stated before the question is sent, not discovered from the answer. */
+export function inputsLabel(images: Pick<UploadInfo, "name" | "modality">[]): string {
+  return images.map((image) => `${image.name} (${image.modality === "sar" ? "SAR" : "optical"})`).join(" and ");
+}
+
+/** "#1 optical, #2 SAR": the input images one execution step read, from the plan in the trace. */
+export function stepInputs(trace: ExecutionTrace, stepId: string): string | null {
+  const step = trace.plan.find((planned) => planned.step_id === stepId);
+  if (!step) return null;
+  return step.image_indices
+    .map((index) => {
+      const modality = trace.images.find((image) => image.index === index)?.modality;
+      return `#${index + 1} ${modality === "sar" ? "SAR" : modality ?? "?"}`;
+    })
+    .join(", ");
 }
 
 /** Bi-temporal actions need two images with distinct acquisition dates; the pipeline cannot infer them. */

@@ -24,11 +24,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from satquery import geo
-from satquery.agent.intents import find_target, needs_multiple_dates
+from satquery.agent.intents import find_target, needs_multiple_dates, needs_optical_and_sar
 from satquery.api import analyze
 from satquery.evidence import save_png
 from satquery.examples import EXAMPLE_QUERIES, EXAMPLES_DIR, load_scenarios
-from satquery.imaging import SUPPORTED_SUFFIXES, load_image, render_rgb
+from satquery.imaging import SUPPORTED_SUFFIXES, detect_modality, load_image, render_rgb
 from satquery.schemas import (AnalysisRequest, AnalysisResponse, ImageInput, ImageSummary,
                               Modality, TaskType)
 from satquery.settings import Settings, load_settings
@@ -88,6 +88,9 @@ class UploadInfo(BaseModel):
     summary: ImageSummary
     preview_url: str
     mappable: bool  # False for PNG/JPEG and CRS-less TIFFs: the client shows those off-map
+    # How `modality` was decided, shown beside it: read from the file's band descriptions, assumed,
+    # or declared by the caller. None where the source fixes it (demo scenarios, retrieved scenes).
+    modality_basis: str | None = None
 
 
 class AnalyzeImage(BaseModel):
@@ -170,9 +173,9 @@ class FetchImageryRequest(BaseModel):
 
 
 class FetchedScene(BaseModel):
-    """One retrieved scene, registered as an upload. `role` places it in a comparison."""
+    """One retrieved scene, registered as an upload. `role` places it in a comparison or a sensor pair."""
 
-    role: Literal["single", "before", "after"]
+    role: Literal["single", "before", "after", "optical", "sar"]
     upload: UploadInfo
     metadata: dict  # SceneMetadata: provider, satellite, date, cloud cover, bands, CRS, processing, ...
 
@@ -195,19 +198,30 @@ class TemporalInfo(BaseModel):
     days_apart: int  # between the two acquisitions actually retrieved
 
 
+class CrossModalInfo(BaseModel):
+    """How the SAR scene was matched to the optical one (policy: satquery/providers/copernicus.py)."""
+
+    days_apart: int  # between the two acquisitions actually retrieved
+    max_days_apart: int
+    explanation: str
+
+
 class FetchImageryResult(BaseModel):
     """Retrieved imagery, registered as ordinary uploads the existing pipeline can analyse.
 
-    `mode` is "single" for one scene and "temporal" for a question about change over time. `images`
-    lists every scene retrieved, oldest first. `upload` and `metadata` are the most recent scene, as
-    they were before two-date retrieval existed, so a single-date client reads them unchanged.
+    `mode` is "single" for one scene, "temporal" for a question about change over time, and
+    "cross_modal" for a question asking for optical and SAR together. `images` lists every scene
+    retrieved: oldest first, or optical then SAR. `upload` and `metadata` are the most recent scene
+    (the optical one for a sensor pair), as they were before multi-scene retrieval existed, so a
+    single-date client reads them unchanged.
     """
 
-    mode: Literal["single", "temporal"] = "single"
+    mode: Literal["single", "temporal", "cross_modal"] = "single"
     upload: UploadInfo
     metadata: dict  # SceneMetadata: provider, satellite, date, cloud cover, bands, CRS, ...
     images: list[FetchedScene] = Field(default_factory=list)
     temporal: TemporalInfo | None = None
+    cross_modal: CrossModalInfo | None = None
     cached: bool = False
 
 
@@ -260,8 +274,25 @@ def _new_folder(parent: Path) -> Path:
     return folder
 
 
+def _upload_modality(path: Path, declared: Modality | None) -> tuple[Modality, str]:
+    """The declared modality, else the one the file's band descriptions state, else optical (said so).
+
+    A SAR file uploaded as optical would pair with an optical image as a bi-temporal pair, so an
+    undeclared upload is never silently assumed when the file itself says what it is.
+    """
+    if declared:
+        return declared, "declared at upload"
+    try:
+        detected, names = detect_modality(path)
+    except Exception:  # unreadable: _register reports it when it loads the raster
+        detected, names = None, []
+    if detected:
+        return detected, f"from band descriptions {', '.join(names)}"
+    return "optical", "assumed: the file does not name its bands; switch to SAR if it is radar"
+
+
 def _register(store: UploadStore, source: Path, name: str, modality: Modality,
-              acquired: str | None, settings: Settings) -> UploadInfo:
+              acquired: str | None, settings: Settings, modality_basis: str | None = None) -> UploadInfo:
     """Load a raster, summarise it with map placement, and remember it for later analysis."""
     try:
         image = load_image(source, modality, acquired, settings.max_pixels)
@@ -275,7 +306,7 @@ def _register(store: UploadStore, source: Path, name: str, modality: Modality,
     upload.preview = preview
     return UploadInfo(id=upload.id, name=name, modality=modality, acquired=acquired,
                       summary=upload.summary, preview_url=f"/api/uploads/{upload.id}/preview.png",
-                      mappable=upload.summary.corners_wgs84 is not None)
+                      mappable=upload.summary.corners_wgs84 is not None, modality_basis=modality_basis)
 
 
 def _safe_child(root: Path, *parts: str) -> Path:
@@ -424,8 +455,9 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
                 for image in scenario.images]
 
     @app.post("/api/uploads", response_model=UploadInfo)
-    def create_upload(file: UploadFile = File(...), modality: Modality = Form("optical"),
+    def create_upload(file: UploadFile = File(...), modality: Modality | None = Form(None),
                       acquired: str | None = Form(None)) -> UploadInfo:
+        """`modality` omitted: read from the file's band descriptions, else optical (and said so)."""
         name = Path(file.filename or "upload").name
         suffix = Path(name).suffix.lower()
         if suffix not in SUPPORTED_SUFFIXES:
@@ -445,7 +477,8 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
             target.unlink()
             target.parent.rmdir()
             raise HTTPException(413, too_large)
-        return _register(store, target, name, modality, (acquired or "").strip() or None, settings)
+        modality, basis = _upload_modality(target, modality)
+        return _register(store, target, name, modality, (acquired or "").strip() or None, settings, basis)
 
     @app.post("/api/fetch-imagery", response_model=FetchImageryResult)
     def fetch_imagery(request: FetchImageryRequest) -> FetchImageryResult:
@@ -469,6 +502,10 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
 
             target, _ = find_target(request.query)
             bands = bands_for_target(target)
+            # A question asking for optical and SAR together gets both sensors, checked first: its
+            # wording ("compare optical and SAR ...") must not be mistaken for a comparison of dates.
+            if needs_optical_and_sar(request.query):
+                return fetch_optical_sar(provider, request, bands, current)
             # One scene can never answer a question about change over time, so such a question gets
             # two real acquisitions of the same area. Never one scene used twice (CLAUDE.md section 7).
             if needs_multiple_dates(request.query):
@@ -538,6 +575,50 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
                                 days_apart=days_apart)
         return FetchImageryResult(mode="temporal", upload=scenes[-1].upload, metadata=scenes[-1].metadata,
                                   images=scenes, temporal=temporal, cached=cached)
+
+    def fetch_optical_sar(provider, request: FetchImageryRequest, bands: list[str],
+                          current: Settings) -> FetchImageryResult:
+        """A Sentinel-2 scene and the Sentinel-1 scene closest to it in time, registered as an
+        optical and a SAR upload, so the existing cross-modal analysis runs on them unchanged.
+
+        Cached under a key that names the mode, so no single-date or temporal entry is ever reused.
+        """
+        from datetime import date
+
+        from satquery.providers.copernicus import SAR_MAX_DAYS_APART
+
+        folder = current.runs_dir / "imagery-cache" / provider.optical_sar_cache_key(
+            request.aoi_bbox, bands, days_back=request.days_back, max_cloud=request.max_cloud)
+        paths = {"optical": folder / "optical.tif", "sar": folder / "sar.tif"}
+        record = folder / "pair.json"
+
+        cached = record.is_file() and all(path.is_file() for path in paths.values())
+        if cached:
+            metadata = json.loads(record.read_text(encoding="utf-8"))
+        else:
+            optical, sar = provider.retrieve_optical_sar(request.aoi_bbox, bands, folder,
+                                                         days_back=request.days_back, max_cloud=request.max_cloud)
+            metadata = {"optical": optical.metadata.as_dict(), "sar": sar.metadata.as_dict()}
+            # Written only after both downloads succeeded and share a grid.
+            record.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+        scenes = []
+        for role in ("optical", "sar"):
+            meta = metadata[role] | {"cached": cached}
+            name = f"{meta['satellite']} {meta['product_level']} {meta['acquired']} ({'SAR' if role == 'sar' else role})"
+            upload = _register(store, paths[role], name, role, meta["acquired"], current)
+            scenes.append(FetchedScene(role=role, upload=upload, metadata=meta))
+
+        optical_meta, sar_meta = metadata["optical"], metadata["sar"]
+        days_apart = abs((date.fromisoformat(sar_meta["acquired"]) - date.fromisoformat(optical_meta["acquired"])).days)
+        info = CrossModalInfo(
+            days_apart=days_apart, max_days_apart=SAR_MAX_DAYS_APART,
+            explanation=(f"The least cloudy {optical_meta['satellite']} scene of the search window, paired with the "
+                         f"{sar_meta['satellite']} VV+VH scene closest to it in time (within {SAR_MAX_DAYS_APART} days). "
+                         f"Both were rendered onto one pixel grid for the selected area; they were acquired "
+                         f"{days_apart} day{'s' if days_apart != 1 else ''} apart."))
+        return FetchImageryResult(mode="cross_modal", upload=scenes[0].upload, metadata=scenes[0].metadata,
+                                  images=scenes, cross_modal=info, cached=cached)
 
     @app.get("/api/uploads/{upload_id}/preview.png")
     def upload_preview(upload_id: str) -> FileResponse:

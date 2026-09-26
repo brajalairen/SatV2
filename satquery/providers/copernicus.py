@@ -1,9 +1,10 @@
-"""Sentinel-2 L2A retrieval from the Copernicus Data Space Ecosystem (Sentinel Hub APIs).
+"""Sentinel-2 L2A (and Sentinel-1 GRD) retrieval from the Copernicus Data Space Ecosystem (Sentinel Hub APIs).
 
-Scope, deliberately small (MVP): Sentinel-2, Level-2A, optical, rectangle AOI; one date, or two
-dates for a question about change over time (see providers/temporal.py). This is an
-acquisition layer only -- it obtains a GeoTIFF and its provenance, then the existing SatQuery
-pipeline does the analysis.
+Scope, deliberately small (MVP): rectangle AOI; one Sentinel-2 date, two dates for a question about
+change over time (see providers/temporal.py), or a Sentinel-2 scene plus the Sentinel-1 scene
+closest to it in time for a question asking for optical and SAR together. This is an acquisition
+layer only -- it obtains GeoTIFFs and their provenance, then the existing SatQuery pipeline does
+the analysis.
 
 Endpoints:
   auth     https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token
@@ -36,6 +37,7 @@ from satquery.providers.errors import (
     NoEarlierImagery,
     NoImageryFound,
     NoLaterImagery,
+    NoSarImagery,
     OnlyOneAcquisition,
     ProcessingFailed,
     ProviderTimeout,
@@ -59,6 +61,17 @@ BAND_SETS = {
 }
 BAND_ROLE = {"B02": "blue", "B03": "green", "B04": "red", "B08": "nir"}
 MAX_DIMENSION = 2500  # Process API caps output size; also keeps a scene inside settings.max_pixels
+
+# Sentinel-1 for questions asking for optical and SAR together. The optical scene is chosen first
+# (clouds constrain it; radar sees through them), then the SAR scene closest to it in time.
+S1_COLLECTION = "sentinel-1-grd"
+S1_BANDS = ["VV", "VH"]  # IW dual polarisation, the standard land acquisition (checked live, 2026-09-27)
+# Sentinel-1 revisits a site every 6-12 days, so 12 days finds a scene on any single relative orbit;
+# a wider gap would pair ground conditions that may have changed, and the gap is always reported.
+SAR_MAX_DAYS_APART = 12
+SAR_PROCESSING = ("Sentinel Hub Process API: the selected day only (no multi-date mosaic), IW mode, dual "
+                  "polarisation VV+VH, orthorectified with the Copernicus 30 m DEM, sigma0 (ellipsoid) backscatter "
+                  "as FLOAT32 linear power, no speckle filter, resampled to the same grid as the optical scene")
 
 
 def bands_for_target(target: str | None) -> list[str]:
@@ -85,6 +98,20 @@ def evalscript(bands: list[str]) -> str:
         "}\n"
         "function evaluatePixel(sample) {\n"
         f"  return [{samples}];\n"
+        "}\n"
+    )
+
+
+def sar_evalscript() -> str:
+    """VV and VH backscatter as FLOAT32 linear power, which satquery.imaging.sar_db converts to dB."""
+    return (
+        "//VERSION=3\n"
+        "function setup() {\n"
+        "  return {input: [{bands: [\"VV\", \"VH\"], units: 'LINEAR_POWER'}],\n"
+        "          output: {bands: 2, sampleType: 'FLOAT32'}};\n"
+        "}\n"
+        "function evaluatePixel(sample) {\n"
+        "  return [sample.VV, sample.VH];\n"
         "}\n"
     )
 
@@ -271,26 +298,30 @@ class CopernicusSentinelProvider:
 
     def _process(self, bbox: tuple[float, float, float, float], bands: list[str],
                  acquired_date: str) -> bytes:
-        west, south, east, north = bbox
+        return self._render(bbox, {
+            "type": COLLECTION,
+            "dataFilter": {
+                # One day, so the raster is the scene that was selected, not a mosaic
+                # spanning dates -- provenance must describe exactly what was analysed.
+                "timeRange": {"from": f"{acquired_date}T00:00:00Z",
+                              "to": f"{acquired_date}T23:59:59Z"},
+                "mosaickingOrder": "leastCC",
+            },
+        }, evalscript(bands))
+
+    def _render(self, bbox: tuple[float, float, float, float], data: dict, script: str) -> bytes:
+        """One Process API request for the area. The output grid depends on the bbox only, so every
+        collection rendered for the same area lands on the same pixel grid."""
         width, height = self._output_size(bbox)
         payload = {
             "input": {
                 "bounds": {"bbox": list(bbox),
                            "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}},
-                "data": [{
-                    "type": COLLECTION,
-                    "dataFilter": {
-                        # One day, so the raster is the scene that was selected, not a mosaic
-                        # spanning dates -- provenance must describe exactly what was analysed.
-                        "timeRange": {"from": f"{acquired_date}T00:00:00Z",
-                                      "to": f"{acquired_date}T23:59:59Z"},
-                        "mosaickingOrder": "leastCC",
-                    },
-                }],
+                "data": [data],
             },
             "output": {"width": width, "height": height,
                        "responses": [{"identifier": "default", "format": {"type": "image/tiff"}}]},
-            "evalscript": evalscript(bands),
+            "evalscript": script,
         }
         response = self._post(PROCESS_URL, payload, what="preparing the imagery")
         content = response.content
@@ -445,6 +476,113 @@ class CopernicusSentinelProvider:
         check_same_grid(before.path, after.path)
         return before, after
 
+    # ----------------------------------------------------------------- optical + SAR
+
+    def search_sar(self, bbox, *, start: date, end: date, limit: int = 50) -> list[dict]:
+        """Sentinel-1 GRD scenes in IW mode covering the area, dates start..end inclusive."""
+        payload = {
+            "bbox": list(bbox),
+            "datetime": f"{start:%Y-%m-%d}T00:00:00Z/{end:%Y-%m-%d}T23:59:59Z",
+            "collections": [S1_COLLECTION],
+            "limit": limit,
+            "filter": "\"sar:instrument_mode\" = 'IW'",
+            "filter-lang": "cql2-text",
+        }
+        return self._post(CATALOG_URL, payload, what="searching the Sentinel-1 catalogue").json().get("features", [])
+
+    @staticmethod
+    def select_sar_scene(features: list[dict], optical_date: date, max_days_apart: int = SAR_MAX_DAYS_APART) -> dict:
+        """The dual-polarisation (VV+VH) scene closest in time to the optical acquisition.
+
+        Ties go to the earlier scene, so the choice is deterministic and reportable.
+        """
+        def gap(feature: dict) -> int | None:
+            try:
+                return (date.fromisoformat(str(feature["properties"]["datetime"])[:10]) - optical_date).days
+            except (KeyError, ValueError):
+                return None
+
+        candidates = [f for f in features
+                      if f.get("properties", {}).get("s1:polarization") == "DV"
+                      and gap(f) is not None and abs(gap(f)) <= max_days_apart]
+        if not candidates:
+            raise NoSarImagery(
+                f"No Sentinel-1 dual-polarisation (VV+VH) scene of this area was found within {max_days_apart} days of "
+                f"the optical scene ({optical_date.isoformat()}), so no optical + SAR pair could be formed. Try "
+                "another area, or upload a co-registered SAR GeoTIFF.")
+        return min(candidates, key=lambda f: (abs(gap(f)), gap(f)))
+
+    def optical_sar_cache_key(self, bbox, bands: list[str], *, days_back: int | None = None,
+                              max_cloud: float | None = None) -> str:
+        """Identity of an optical + SAR request. "mode" keeps it apart from single-date and temporal keys."""
+        material = json.dumps({
+            "mode": "optical_sar",
+            "bbox": [round(float(v), 6) for v in bbox],
+            "collections": [COLLECTION, S1_COLLECTION],
+            "days_back": self.days_back if days_back is None else days_back,
+            "max_cloud": self.max_cloud if max_cloud is None else max_cloud,
+            "max_days_apart": SAR_MAX_DAYS_APART,
+            "resolution_m": self.resolution_m,
+            "bands": list(bands) + S1_BANDS,
+        }, sort_keys=True)
+        return hashlib.sha256(material.encode()).hexdigest()[:16]
+
+    def retrieve_optical_sar(self, bbox_wgs84, bands: list[str], destination_dir: Path, *,
+                             days_back: int | None = None, max_cloud: float | None = None
+                             ) -> tuple[RetrievedScene, RetrievedScene]:
+        """A Sentinel-2 scene and the Sentinel-1 scene closest to it in time, on one pixel grid.
+
+        Both are rendered for the same bounds and output size, so they share a grid by construction;
+        that is still verified on the files, and a mismatch stops the analysis rather than resampling.
+        """
+        bbox = tuple(float(v) for v in bbox_wgs84)
+        self.validate_area(bbox)
+        optical_features = self.search(bbox, days_back=days_back, max_cloud=max_cloud)
+        optical_scene = self.select_scene(optical_features)
+        try:
+            optical_date = date.fromisoformat(str(optical_scene.get("properties", {}).get("datetime", ""))[:10])
+        except ValueError as error:
+            raise NoImageryFound("The selected scene has no acquisition date; cannot retrieve it.") from error
+        today = datetime.now(timezone.utc).date()
+        sar_features = self.search_sar(bbox, start=optical_date - timedelta(days=SAR_MAX_DAYS_APART),
+                                       end=min(optical_date + timedelta(days=SAR_MAX_DAYS_APART), today))
+        sar_scene = self.select_sar_scene(sar_features, optical_date)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            optical_job = pool.submit(self._download, bbox, bands, optical_scene, destination_dir / "optical.tif",
+                                      alternatives=len(optical_features))
+            sar_job = pool.submit(self._download_sar, bbox, sar_scene, destination_dir / "sar.tif",
+                                  alternatives=len(sar_features))
+            optical, sar = optical_job.result(), sar_job.result()
+        check_same_grid(optical.path, sar.path, compare_band_count=False)
+        return optical, sar
+
+    def _download_sar(self, bbox, scene: dict, destination: Path, *, alternatives: int) -> RetrievedScene:
+        properties = scene.get("properties", {})
+        acquired_datetime = str(properties.get("datetime", ""))
+        acquired = acquired_datetime[:10]
+        if not acquired:
+            raise NoSarImagery("The selected Sentinel-1 scene has no acquisition date; cannot retrieve it.")
+        content = self._render(bbox, {
+            "type": S1_COLLECTION,
+            "dataFilter": {"timeRange": {"from": f"{acquired}T00:00:00Z", "to": f"{acquired}T23:59:59Z"},
+                           "acquisitionMode": "IW", "polarization": "DV", "resolution": "HIGH"},
+            "processing": {"orthorectify": True, "demInstance": "COPERNICUS_30", "backCoeff": "SIGMA0_ELLIPSOID"},
+        }, sar_evalscript())
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        width, height = self._label_bands(destination, S1_BANDS)
+        platform = str(properties.get("platform", ""))  # e.g. "sentinel-1d", as the catalogue reports it
+        satellite = f"Sentinel-{platform.split('-', 1)[1].upper()}" if platform.startswith("sentinel-") else "Sentinel-1"
+        metadata = SceneMetadata(
+            provider=self.name, collection=S1_COLLECTION, satellite=satellite, product_level="GRD",
+            acquired=acquired, acquired_datetime=acquired_datetime, cloud_cover=None,
+            bbox_wgs84=bbox, crs="EPSG:4326", resolution_m=self.resolution_m,
+            bands=["VV (co-pol)", "VH (cross-pol)"], width=width, height=height, scene_id=scene.get("id"),
+            alternatives_considered=alternatives, processing=SAR_PROCESSING, modality="sar",
+        )
+        return RetrievedScene(path=destination, metadata=metadata)
+
     @staticmethod
     def _label_bands(path: Path, bands: list[str]) -> tuple[int, int]:
         """Write band descriptions so satquery.imaging reads roles instead of assuming them.
@@ -478,8 +616,11 @@ def _negated_timestamp(value: str) -> float:
         return 0.0
 
 
-def check_same_grid(first: Path, second: Path) -> None:
-    """Raise GridsIncompatible unless both rasters share size, CRS, transform and band count."""
+def check_same_grid(first: Path, second: Path, *, compare_band_count: bool = True) -> None:
+    """Raise GridsIncompatible unless both rasters share size, CRS, transform and (by default) band count.
+
+    An optical + SAR pair legitimately differs in band count, so it is compared on the grid alone.
+    """
     import rasterio
 
     try:
@@ -492,7 +633,7 @@ def check_same_grid(first: Path, second: Path) -> None:
     problems = []
     if (w1, h1) != (w2, h2):
         problems.append(f"size {w1}x{h1} vs {w2}x{h2}")
-    if n1 != n2:
+    if compare_band_count and n1 != n2:
         problems.append(f"{n1} vs {n2} bands")
     if crs1 != crs2:
         problems.append(f"CRS {crs1} vs {crs2}")
@@ -501,4 +642,4 @@ def check_same_grid(first: Path, second: Path) -> None:
     if problems:
         raise GridsIncompatible(
             "The two retrieved scenes do not share a pixel grid (" + "; ".join(problems) + "), so no pixel-wise "
-            "change analysis was run. They are not resampled onto each other silently.")
+            "analysis was run. They are not resampled onto each other silently.")

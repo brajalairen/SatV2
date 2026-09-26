@@ -143,6 +143,9 @@ export interface UploadInfo {
   preview_url: string;
   /** false for PNG/JPEG and CRS-less TIFFs, which are shown off-map instead. */
   mappable: boolean;
+  /** How `modality` was decided at upload (e.g. "from band descriptions VV, VH"). Absent for demo
+   *  scenarios and retrieved scenes, whose source fixes it. */
+  modality_basis?: string | null;
 }
 
 export interface Example {
@@ -185,11 +188,13 @@ export interface SceneMetadata {
   alternatives_considered: number;
   /** How the raster was produced (Process API, one day only, reflectance, grid). */
   processing: string;
+  /** "sar" for a Sentinel-1 scene retrieved to pair with an optical one. */
+  modality?: Modality;
 }
 
 /** One retrieved scene, registered as an upload. Mirrors satquery.server.FetchedScene. */
 export interface FetchedScene {
-  role: "single" | "before" | "after";
+  role: "single" | "before" | "after" | "optical" | "sar";
   upload: UploadInfo;
   metadata: SceneMetadata;
 }
@@ -210,15 +215,23 @@ export interface TemporalInfo {
   days_apart: number;
 }
 
+/** How the SAR scene was matched to the optical one. Mirrors satquery.server.CrossModalInfo. */
+export interface CrossModalInfo {
+  days_apart: number;
+  max_days_apart: number;
+  explanation: string;
+}
+
 export interface FetchImageryResult {
-  /** "temporal" when the question needs two dates and two acquisitions were retrieved. */
-  mode: "single" | "temporal";
-  /** The most recent scene, kept for single-date clients. */
+  /** "temporal" when the question needs two dates; "cross_modal" when it asks for optical and SAR together. */
+  mode: "single" | "temporal" | "cross_modal";
+  /** The most recent scene (the optical one of a sensor pair), kept for single-date clients. */
   upload: UploadInfo;
   metadata: SceneMetadata;
-  /** Every scene retrieved, oldest first: one, or two for a comparison. */
+  /** Every scene retrieved: oldest first, or optical then SAR. */
   images: FetchedScene[];
   temporal: TemporalInfo | null;
+  cross_modal?: CrossModalInfo | null;
   cached: boolean;
 }
 

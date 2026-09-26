@@ -8,7 +8,8 @@ from uuid import uuid4
 
 from satquery.agent.aggregator import aggregate
 from satquery.agent.executor import execute
-from satquery.agent.intents import COMPATIBLE_TASKS, classify, find_target, needs_multiple_dates
+from satquery.agent.intents import (COMPATIBLE_TASKS, classify, find_target, needs_multiple_dates,
+                                    needs_optical_and_sar)
 from satquery.agent.planner import build_plan
 from satquery.evidence import write_reports
 from satquery import geo
@@ -53,6 +54,23 @@ def _errors(issues: list[ValidationIssue]) -> list[ValidationIssue]:
     return [i for i in issues if i.severity == "error"]
 
 
+def _missing_modality(query: str, images) -> ValidationIssue | None:
+    """A structured refusal when the query asks for optical + SAR but one modality is absent."""
+    phrase = needs_optical_and_sar(query)
+    if not phrase:
+        return None
+    present = {image.modality for image in images}
+    if present == {"optical", "sar"}:
+        return None
+    have, need = ("optical", "SAR") if "optical" in present else ("SAR", "optical")
+    count = "an" if have == "optical" else "a"
+    provided = f"only {count} {have} image was provided" if len(images) == 1 else f"both images are declared {have}"
+    return issue(f"missing_{need.lower()}",
+                 f'"{phrase}" asks for a joint optical + SAR analysis, but {provided}, so there is no {need} '
+                 f"evidence to combine. Add {'an' if need == 'optical' else 'a'} {need} image of the same area on the "
+                 f"same pixel grid, or, if one of these images is {need}, mark it as {need} and ask again.")
+
+
 def analyze(request: AnalysisRequest, settings: Settings | None = None, vlm: VLMBackend | None = None) -> AnalysisResponse:
     settings = settings or load_settings()
     started = time.perf_counter()
@@ -91,6 +109,13 @@ def analyze(request: AnalysisRequest, settings: Settings | None = None, vlm: VLM
 
     config = detect_input_config([image.modality for image in images])
     trace.input_config = config
+    # A question asking for optical and SAR together is refused unless both are present. Checked
+    # first: it must never fall through to single-image VQA, to bi-temporal change analysis on two
+    # optical images, or to the temporal refusal below ("compare optical and SAR" names no dates).
+    missing = None if request.forced_task or config == "pair_cross_modal" else _missing_modality(request.query, images)
+    if missing:
+        trace.validation.append(missing)
+        return reject()
     # One image cannot show a change, so the VLM is never asked to infer one from a single frame.
     # A forced task is the caller's explicit choice and is checked against the inputs below instead.
     phrase = None if request.forced_task or len(images) != 1 else needs_multiple_dates(request.query)

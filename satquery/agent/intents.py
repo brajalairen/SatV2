@@ -46,6 +46,45 @@ TEMPORAL_CUES = re.compile(
     r")", re.I)
 
 
+# Does the query ask for optical and SAR evidence together? Used to refuse, rather than silently
+# re-route, a joint question that arrives without both modalities: one optical image would otherwise
+# be answered by single-image VQA, and two optical images by bi-temporal change analysis.
+# A query counts when it names both a SAR term and an optical term, or asks for fusion outright.
+# One sensor alone ("describe this radar scene", "the spectral signature") does not count.
+SAR_TERMS = re.compile(r"\b(?:sar|radar|backscatter\w*|sentinel-?1|risat|microwave)\b", re.I)
+OPTICAL_TERMS = re.compile(r"\b(?:optical|multi-?spectral|sentinel-?2|cartosat|spectral|ndwi|ndvi)\b", re.I)
+JOINT_TERMS = re.compile(r"\b(?:cross[- ]?modal\w*|multi[- ]?modal\w*|multi[- ]?sensor|(?:both|two) sensors|"
+                         r"sensor fusion|data fusion|fus(?:e|ed|ing|ion))\b", re.I)
+
+# The classes the cross-modal tools can analyse, in the order they are reported.
+CROSS_MODAL_CLASSES = ("water", "building")
+
+
+def needs_optical_and_sar(query: str) -> str | None:
+    """The phrase that asks for joint optical + SAR analysis, or None. Quoted back in refusals."""
+    joint = JOINT_TERMS.search(query)
+    if joint:
+        return joint.group(0)
+    sar, optical = SAR_TERMS.search(query), OPTICAL_TERMS.search(query)
+    if sar and optical:
+        first, last = sorted((sar, optical), key=lambda match: match.start())
+        return query[first.start():last.end()]
+    return None
+
+
+def find_area_targets(query: str) -> list[str]:
+    """Every area class the query names, in AREA_TARGETS order ("built-up and water" -> both)."""
+    text = query.lower()
+    return [canonical for canonical, words in AREA_TARGETS.items()
+            if any(re.search(rf"\b{re.escape(w)}", text) for w in words)]
+
+
+def cross_modal_classes(query: str) -> list[str]:
+    """Which classes a cross-modal query asks about; both when it names neither."""
+    named = find_area_targets(query)
+    return [c for c in CROSS_MODAL_CLASSES if c in named] or list(CROSS_MODAL_CLASSES)
+
+
 def needs_multiple_dates(query: str) -> str | None:
     """The temporal phrase that makes `query` unanswerable from a single image, or None.
 
@@ -77,8 +116,10 @@ def classify(query: str, config: InputConfig) -> Intent:
             rule += f"; target '{target}'" + ("; comparative cue" if comparative else "")
         return Intent(task="change_analysis", target=target, comparative=comparative, matched_rule=rule)
     if config == "pair_cross_modal":
-        return Intent(task="cross_modal_analysis", target=target,
-                      matched_rule="input configuration pair_cross_modal -> cross_modal_analysis")
+        cue = needs_optical_and_sar(query)
+        rule = "input configuration pair_cross_modal -> cross_modal_analysis"
+        rule += (f"; cross-modal cue '{cue}'" if cue else "") + f"; classes {', '.join(cross_modal_classes(query))}"
+        return Intent(task="cross_modal_analysis", target=target, matched_rule=rule)
 
     grounding = GROUNDING_CUES.search(query)
     caption = CAPTION_CUES.search(query)

@@ -35,6 +35,7 @@ class SceneMetadata:
     # How the raster was produced, so the provenance says exactly what was analysed.
     processing: str = ("Sentinel Hub Process API: the selected day only (no multi-date mosaic), least-cloud "
                        "tile order, bands as FLOAT32 surface reflectance, resampled to the requested grid")
+    modality: str = "optical"  # "sar" for Sentinel-1: how the raster is registered for analysis
 
     def as_dict(self) -> dict:
         from dataclasses import asdict

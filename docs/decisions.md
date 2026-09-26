@@ -11,6 +11,47 @@ In ~2 days we submit the **first-round** entry: a PPT, a demo video, and a **wor
 - **Rule:** a convincing, working end-to-end demo beats polish. Build the smallest version of the approved architecture that supports the demo and can be extended later.
 - **Tie-break:** when polishing an existing part competes with building a missing part the demo needs, build the missing part.
 
+## D-028 · Optical + SAR joint analysis end to end, with Sentinel-1 pairing (2026-09-27, requested by the user; choices below PROPOSED, team to confirm)
+- **Why:** the cross-modal pair is mandatory (SIH). Before this, an optical+SAR pair reached `fusion.cross_modal`
+  only if both modalities were declared correctly, and the web upload declared every file optical. Measured on the
+  real BigEarthNet demo files: the representative query on two uploads went to **bi-temporal change analysis**
+  ("water area increased" between an S2 and an S1 image); on one optical image, to single-image VQA; on one SAR image
+  "Compare optical and SAR…" was refused as a *temporal* question. The only overlay was a composite, never on the map.
+- **Now (implemented):**
+  - `intents.needs_optical_and_sar` recognises a joint question (a SAR term and an optical term, or explicit
+    fusion/cross-modal/both-sensors wording). Without both modalities `analyze()` refuses with `missing_sar` /
+    `missing_optical`, checked **before** the temporal refusal and before routing.
+  - Upload modality comes from the file's own band descriptions (VV/VH/HH/HV → SAR; B0x/red/green/blue/nir → optical);
+    undescribed files are assumed optical and say so. Descriptions contradicting the declared modality → `modality_conflict`.
+  - Pair validation adds `grid_resolution_mismatch` (same shape and origin, different pixel size), `no_common_valid_pixels`,
+    `acquisition_gap` (warning) and `coregistration_unverified` (warning, below).
+  - The plan fuses only the classes the query names (water, built-up; both when it names neither).
+  - `fusion.cross_modal` restricts both masks to pixels valid in both images, and reports per class
+    both/optical-only/SAR-only and IoU with a heuristic agreement level (≥0.5 high, ≥0.25 moderate).
+  - The answer separates optical, SAR and fused evidence, names what produced each figure, and states low agreement.
+  - Evidence: one transparent map layer per class, pinned to the pair's shared grid.
+- **Measured, 2026-09-27 (real Falcon, CPU, the two BigEarthNet demo S2 patches, 10 m):** `vlm.segment building`
+  answered "The object does not exist." on both (0%); `vlm.segment water` gave 80.1% / 26.4% against NDWI 89.2% / 24.2%;
+  the spectral built-up proxy gave 1.3% / 1.1%. Scratch measurement, not a benchmark.
+- **PROPOSED choices (please confirm or overturn):**
+  1. **Optical evidence source**, as in `_bitemporal`: multispectral input (NIR present) uses `optical.spectral_indices`
+     (NDWI, and the low-NDVI/NDWI built-up proxy, which includes bare soil); RGB/PAN input uses VLM segmentation. So on
+     multispectral pairs the cross-modal plan runs **no model step**. For Cartosat-2S MX (4 bands, 2 m) this also picks
+     the spectral path, although the VLM may do better at 2 m: UNKNOWN until tested on such data.
+  2. **Pairs without a CRS** on identical pixel grids run, with a `coregistration_unverified` warning, instead of being
+     refused: SIH defines the inputs as co-registered and allows TIFFs without a CRS. Refusing them is the alternative.
+  3. **No resampling** of pairs on different grids (D-008 stands): they are refused. If the hidden Cartosat/RISAT pairs
+     arrive at different resolutions, this needs a new decision.
+  4. **Sentinel-1 retrieval** for a joint question over a drawn rectangle: the least cloudy Sentinel-2 L2A scene, then
+     the Sentinel-1 GRD IW VV+VH scene closest to it within **12 days**, orthorectified (Copernicus 30 m DEM), sigma0
+     ellipsoid, linear power, rendered on the same bbox and output grid. Checked live: S1D/S1C scenes exist over Navi
+     Mumbai and Dubai; the pairs retrieved were 1 day apart. This extends the Copernicus retrieval already in the code,
+     which D-012 still lists as excluded: **that discrepancy predates this entry and needs a decision of its own.**
+- **Known weakness surfaced, NOT changed here:** `sar.water_mask` uses an adaptive Otsu threshold (D-009). Over dense
+  urban Dubai the threshold landed at −6.4 dB and flagged 51.9% "low backscatter"; over inland desert, 74.7%. Fusion
+  reports these as SAR-only with low agreement instead of hiding them, and the fused (both-sensor) water matched
+  optical NDWI. Bounding the threshold physically would change the single-SAR path too, so it is left to the team.
+
 ## D-027 · SIH R5 adaptation is a LoRA fine-tune of Falcon on BigEarthNet.txt binary VQA (2026-09-21, executes docs/adaptation-plan.md)
 - **Why:** R5 is the one mandatory SIH item with no implementation. Falcon is remote-sensing pre-trained by its
   authors, not by us (D-021), so it does not satisfy R5. LoRA on the *same* component the demo runs on means the

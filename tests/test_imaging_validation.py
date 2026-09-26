@@ -1,6 +1,7 @@
 import numpy as np
+import pytest
 
-from satquery.imaging import load_image, render_rgb, sar_db
+from satquery.imaging import detect_modality, load_image, modality_from_band_names, render_rgb, sar_db
 from satquery.schemas import AnalysisRequest, ImageInput
 from satquery.validation import check_images, check_request, detect_input_config
 
@@ -79,3 +80,27 @@ def test_linear_sar_with_a_few_negative_noise_samples_is_still_linear(write_tiff
     co_db, _, units = sar_db(image)
     assert "linear" in units
     assert np.allclose(co_db[2:], sar_scene[0, 2:], atol=1e-3), "valid pixels convert back to their dB values"
+
+
+@pytest.mark.parametrize("names, modality", [
+    (["VV", "VH"], "sar"),
+    (["HH", "HV"], "sar"),
+    (["VV"], "sar"),
+    (["B02", "B03", "B04", "B08"], "optical"),
+    (["blue", "green", "red", "nir"], "optical"),
+    (["pan"], "optical"),
+    (["B8A", "B11"], "optical"),
+    (["VV", "B04"], None),  # mixed: says nothing
+    (["band1", "band2"], None),
+    (["VV", ""], None),  # one band unnamed: not a full statement
+    ([], None),
+])
+def test_modality_from_band_names(names, modality):
+    assert modality_from_band_names(names) == modality
+
+
+def test_detect_modality_reads_only_what_the_file_states(write_tiff, write_png, sar_scene, optical_scene):
+    assert detect_modality(write_tiff("s1.tif", sar_scene, band_names=["VV", "VH"])) == ("sar", ["VV", "VH"])
+    assert detect_modality(write_tiff("s2.tif", optical_scene, band_names=["B02", "B03", "B04", "B08"]))[0] == "optical"
+    assert detect_modality(write_tiff("unnamed.tif", sar_scene)) == (None, [])  # dB values alone are not proof
+    assert detect_modality(write_png("p.png", np.zeros((16, 16, 3)))) == (None, [])

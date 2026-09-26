@@ -10,7 +10,21 @@ from PIL import Image, ImageDraw
 from satquery.schemas import AnalysisResponse
 
 COLORS = {"red": (230, 57, 70), "blue": (30, 120, 255), "cyan": (0, 210, 230), "yellow": (255, 205, 0),
-          "orange": (255, 140, 0), "green": (46, 204, 113)}
+          "orange": (255, 140, 0), "green": (46, 204, 113), "violet": (170, 90, 255)}
+
+
+def mask_layer(shape: tuple[int, int], masks=(), alpha: int = 190) -> np.ndarray:
+    """RGBA (height, width, 4): each mask in its colour, transparent everywhere else.
+
+    Unlike `overlay`, which paints onto a render of one image, this carries no imagery, so a map can
+    draw it over either input of a co-registered pair. masks: [(bool array, color)] or
+    [(bool array, color, alpha)], later ones on top; `alpha` is the default opacity (0-255).
+    """
+    out = np.zeros((*shape, 4), dtype=np.uint8)
+    for mask, color, *own_alpha in masks:
+        if mask is not None and mask.shape == tuple(shape):
+            out[mask] = (*COLORS[color], own_alpha[0] if own_alpha else alpha)
+    return out
 
 
 def blend(rgb: np.ndarray, mask: np.ndarray, color: str, alpha: float = 0.45) -> np.ndarray:
@@ -76,8 +90,12 @@ def write_reports(response: AnalysisResponse, run_dir: Path) -> tuple[str, str]:
     esc = lambda value: html.escape(str(value))
     overlays = "".join(f"<figure>{embed(e.file)}<figcaption>{esc(e.label)}</figcaption></figure>"
                        for e in response.evidence if e.kind == "overlay" and e.file)
+    # Which input each step read, e.g. "#1 optical, #2 sar": a cross-modal plan shows its split here.
+    modality = {image.index: image.modality for image in trace.images}
+    inputs = {p.step_id: ", ".join(f"#{i + 1} {modality.get(i, '?')}" for i in p.image_indices) for p in trace.plan}
     steps = "".join(
-        f"<tr><td>{esc(s.step_id)}</td><td>{esc(s.tool)}</td><td>{esc(s.model or '-')}</td><td><code>{esc(s.params)}</code></td>"
+        f"<tr><td>{esc(s.step_id)}</td><td>{esc(s.tool)}</td><td>{esc(inputs.get(s.step_id, '-'))}</td>"
+        f"<td>{esc(s.model or '-')}</td><td><code>{esc(s.params)}</code></td>"
         f"<td>{esc(s.status)}</td><td>{s.duration_s:.2f}s</td><td>{esc(s.error or '')}</td></tr>" for s in trace.steps)
     issues = "".join(f"<li><b>{esc(i.severity)}</b> [{esc(i.code)}] {esc(i.message)}</li>" for i in trace.validation) or "<li>none</li>"
     images = "".join(f"<li>#{i.index + 1} {esc(i.name)}: {esc(i.modality)}, {i.width}x{i.height} px, bands {esc(i.bands)}, "
@@ -88,7 +106,7 @@ def write_reports(response: AnalysisResponse, run_dir: Path) -> tuple[str, str]:
     page = f"""<!doctype html><html><head><meta charset="utf-8"><title>SatQuery report {esc(trace.run_id)}</title>
 <style>body{{font-family:system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#222}}
 table{{border-collapse:collapse;width:100%;font-size:13px}}td,th{{border:1px solid #ddd;padding:4px 6px;text-align:left}}
-figure{{margin:12px 0}}.answer{{background:#f3f7ff;padding:12px;border-radius:6px}}</style></head><body>
+figure{{margin:12px 0}}.answer{{background:#f3f7ff;padding:12px;border-radius:6px;white-space:pre-line}}</style></head><body>
 <h1>SatQuery AI: analysis report</h1>
 <p><b>Run</b> {esc(trace.run_id)} · {esc(trace.created_at)} · status <b>{esc(response.status)}</b></p>
 <p><b>Query:</b> {esc(trace.query)}</p>
@@ -97,7 +115,7 @@ figure{{margin:12px 0}}.answer{{background:#f3f7ff;padding:12px;border-radius:6p
 <div class="answer"><b>Answer.</b> {esc(response.answer)}</div>
 <p><b>Confidence:</b> {confidence_text}</p>
 <h2>Visual evidence</h2>{overlays or '<p>none</p>'}
-<h2>Execution trace</h2><table><tr><th>Step</th><th>Tool</th><th>Model</th><th>Parameters</th><th>Status</th><th>Time</th><th>Note</th></tr>{steps}</table>
+<h2>Execution trace</h2><table><tr><th>Step</th><th>Tool</th><th>Input</th><th>Model</th><th>Parameters</th><th>Status</th><th>Time</th><th>Note</th></tr>{steps}</table>
 <h2>Inputs</h2><ul>{images}</ul><h2>Validation</h2><ul>{issues}</ul>
 <p style="font-size:12px;color:#666">Heuristic confidences are uncalibrated. Full machine-readable trace: report.json.</p>
 </body></html>"""

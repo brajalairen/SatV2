@@ -86,10 +86,10 @@ export function HelpPanel() {
 
       <div className="mt-5 border-t border-line pt-3 text-[11px] leading-relaxed text-faint">
         <p>
-          <strong className="font-medium text-muted">What this build does not do.</strong> Imagery retrieval covers
-          Sentinel-2 L2A only, for a drawn rectangle, at a single date: it cannot answer questions about change over
-          time, and the source, resolution and cloud-cover filters below are not wired to it. Everything else runs on
-          the files you provide.
+          <strong className="font-medium text-muted">What this build does not do.</strong> Imagery retrieval covers a
+          drawn rectangle only: Sentinel-2 L2A at one date, or two dates for a question about change, plus the closest
+          Sentinel-1 GRD scene for a question asking for optical and SAR together. The source, resolution and
+          cloud-cover filters below are not wired to it. Everything else runs on the files you provide.
         </p>
         <p className="mt-2">
           Confidence values are uncalibrated and every one states the method that produced it. Several tools are

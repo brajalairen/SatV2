@@ -101,3 +101,43 @@ def test_one_live_temporal_retrieval_feeds_the_change_pipeline(tmp_path):
     change = next(s for s in response.trace.steps if s.tool == "change.map")
     assert change.status == "ok"
     print(f"  change.map: {change.outputs['fraction'] * 100:.1f}% flagged (heuristic)")
+
+
+def test_one_live_optical_sar_retrieval_feeds_the_cross_modal_pipeline(tmp_path):
+    """A real Sentinel-2 scene and the closest real Sentinel-1 scene, on one grid, analysed jointly."""
+    from datetime import date
+
+    from satquery.api import analyze
+    from satquery.providers.copernicus import SAR_MAX_DAYS_APART
+    from satquery.schemas import AnalysisRequest, ImageInput
+    from satquery.settings import Settings
+    from satquery.specialists.vlm import FakeVLM
+
+    settings = load_settings()
+    if not settings.copernicus_configured:
+        pytest.skip("Copernicus credentials are not configured in .env")
+    provider = CopernicusSentinelProvider(  # shipped defaults: 30 days, 20% cloud limit
+        settings.copernicus_client_id, settings.copernicus_client_secret,
+        max_cloud=settings.copernicus_max_cloud, max_aoi_km2=settings.copernicus_max_aoi_km2,
+        resolution_m=settings.copernicus_resolution_m)
+    area = (55.40, 25.05, 55.45, 25.10)  # the temporal test's area: usually cloud-free
+
+    optical, sar = provider.retrieve_optical_sar(area, bands_for_target(None), tmp_path / "pair")
+    o, s = optical.metadata, sar.metadata
+    print(f"\n  optical: {o.scene_id} | {o.acquired} | cloud {o.cloud_cover}% | {o.width}x{o.height}")
+    print(f"  sar:     {s.scene_id} | {s.acquired} | {s.satellite} {s.product_level} | {s.width}x{s.height}")
+
+    assert o.satellite == "Sentinel-2" and s.satellite.startswith("Sentinel-1") and s.product_level == "GRD"
+    assert abs((date.fromisoformat(s.acquired) - date.fromisoformat(o.acquired)).days) <= SAR_MAX_DAYS_APART
+    assert (o.width, o.height) == (s.width, s.height) and o.bbox_wgs84 == s.bbox_wgs84 == area
+    assert load_image(sar.path, modality="sar").band_names == ["VV", "VH"]
+
+    response = analyze(AnalysisRequest(
+        query="Use the optical and SAR images together to identify built-up and water-covered regions.",
+        images=[ImageInput(path=str(optical.path), modality="optical", acquired=o.acquired),
+                ImageInput(path=str(sar.path), modality="sar", acquired=s.acquired)]),
+        settings=Settings(vlm_backend="fake", runs_dir=tmp_path / "runs"), vlm=FakeVLM())
+    assert response.status == "ok" and response.task == "cross_modal_analysis"
+    fusion = next(step for step in response.trace.steps if step.tool == "fusion.cross_modal")
+    assert fusion.status == "ok" and set(fusion.outputs) == {"water", "built_up"}
+    print("  " + response.answer.replace("\n", "\n  "))

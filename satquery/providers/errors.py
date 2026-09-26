@@ -83,6 +83,13 @@ class OnlyOneAcquisition(RetrievalError):
     status, code = 404, "only_one_acquisition"
 
 
+class NoSarImagery(RetrievalError):
+    """No SAR scene close enough in time to the optical one. An optical scene is never analysed alone
+    in answer to a question that asks for optical and SAR together."""
+
+    status, code = 404, "no_sar_imagery"
+
+
 class GridsIncompatible(RetrievalError):
     """The two rasters do not share a pixel grid, so no pixel-wise comparison is run."""
 

@@ -90,7 +90,8 @@ def test_cross_modal(settings, write_tiff, optical_scene, sar_scene):
     response = run(settings, "Use the optical and SAR images together to identify built-up and water-covered regions.",
                    (optical, "optical", None), (sar, "sar", None))
     assert response.task == "cross_modal_analysis" and response.status == "ok"
-    assert "Water:" in response.answer and "agreement" in response.confidence.method
+    assert "Optical evidence" in response.answer and "SAR evidence" in response.answer
+    assert "agreement" in response.confidence.method
     assert_complete(response)
 
 

@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
   areaGeometry,
+  inputsLabel,
   isRectangle,
   nextAnalysisSource,
   readBasemap,
   selectAnalysisImages,
+  stepInputs,
   temporalReadiness,
   useAppStore,
   type Aoi,
@@ -584,5 +586,69 @@ describe("what the next question runs on", () => {
     useAppStore.getState().setFetchedLayers([upload("jul"), upload("sep")]);
 
     expect(useAppStore.getState().layers.map((l) => l.id)).toEqual(["mine", "jul", "sep"]);
+  });
+});
+
+describe("saying what a question runs on", () => {
+  it("names each image with its modality, which decides the route", () => {
+    expect(inputsLabel([upload("s2"), upload("s1", { modality: "sar" })])).toBe("s2.tif (optical) and s1.tif (SAR)");
+    expect(inputsLabel([upload("s2")])).toBe("s2.tif (optical)");
+  });
+
+  it("lists the inputs each execution step read, from the plan", () => {
+    const trace = result([]).response.trace;
+    trace.images = [
+      { ...upload("s2").summary, index: 0, modality: "optical" },
+      { ...upload("s1").summary, index: 1, modality: "sar" },
+    ];
+    trace.plan = [
+      { step_id: "s1", tool: "sar.water_mask", image_indices: [1], params: {}, purpose: "SAR evidence" },
+      { step_id: "s2", tool: "fusion.cross_modal", image_indices: [0, 1], params: {}, purpose: "fuse" },
+    ];
+    expect(stepInputs(trace, "s1")).toBe("#2 SAR");
+    expect(stepInputs(trace, "s2")).toBe("#1 optical, #2 SAR");
+    expect(stepInputs(trace, "missing")).toBeNull();
+  });
+});
+
+describe("fetching optical and SAR together", () => {
+  /** A cross_modal /api/fetch-imagery answer: a Sentinel-2 scene and the Sentinel-1 scene closest to it. */
+  function sensorPairFetch() {
+    const optical = {
+      role: "optical",
+      upload: { ...upload("s2"), acquired: "2026-09-14" },
+      metadata: { satellite: "Sentinel-2", product_level: "L2A", acquired: "2026-09-14", cloud_cover: 3, modality: "optical" },
+    };
+    const sar = {
+      role: "sar",
+      upload: { ...upload("s1"), modality: "sar", acquired: "2026-09-18" },
+      metadata: { satellite: "Sentinel-1D", product_level: "GRD", acquired: "2026-09-18", cloud_cover: null, modality: "sar" },
+    };
+    return { mode: "cross_modal", upload: optical.upload, metadata: optical.metadata, images: [optical, sar],
+             temporal: null, cross_modal: { days_apart: 4, max_days_apart: 12, explanation: "closest in time" },
+             cached: false };
+  }
+
+  it("sends the optical and the SAR scene to the analysis, each with its modality", async () => {
+    fetchImagery.mockResolvedValue(sensorPairFetch());
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    const stages: string[] = [];
+    const stop = useAppStore.subscribe((state) => {
+      if (state.stage && stages.at(-1) !== state.stage) stages.push(state.stage);
+    });
+
+    await useAppStore.getState().runAnalysis("Use the optical and SAR images together to find water.");
+    stop();
+
+    expect(analyze.mock.calls[0]?.[1]).toEqual([
+      { upload_id: "s2", modality: "optical", acquired: "2026-09-14" },
+      { upload_id: "s1", modality: "sar", acquired: "2026-09-18" },
+    ]);
+    expect(stages).toEqual(["searching", "pairing", "analysing"]);
+    expect(useAppStore.getState().scenes.map((s) => s.satellite)).toEqual(["Sentinel-2", "Sentinel-1D"]);
+    expect(useAppStore.getState().layers.map((l) => [l.id, l.modality, l.fetched])).toEqual([
+      ["s2", "optical", true],
+      ["s1", "sar", true],
+    ]);
   });
 });

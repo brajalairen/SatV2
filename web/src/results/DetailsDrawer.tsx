@@ -5,7 +5,7 @@
  *  and both report downloads. Hidden by default, never hard to find. */
 
 import { Download, X } from "lucide-react";
-import { useAppStore } from "../state/useAppStore";
+import { stepInputs, useAppStore } from "../state/useAppStore";
 import { cx, IconButton, Surface } from "../ui/primitives";
 import { taskLabel } from "./ResultOverlay";
 import type { StepStatus } from "../state/types";
@@ -24,6 +24,8 @@ export function DetailsDrawer() {
   const { response } = result;
   const { trace } = response;
   const overlays = response.evidence.filter((item) => item.kind === "overlay" && item.file);
+  /** Why the planner scheduled a step, e.g. "SAR evidence: low backscatter (water-like, specular)". */
+  const purpose = (stepId: string) => trace.plan.find((step) => step.step_id === stepId)?.purpose ?? null;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-40 flex justify-end">
@@ -67,7 +69,9 @@ export function DetailsDrawer() {
                   </div>
                   <p className="mt-0.5 text-[10px] text-faint">
                     {step.model ?? "deterministic"} - {step.duration_s.toFixed(2)}s
+                    {stepInputs(trace, step.step_id) && ` - input ${stepInputs(trace, step.step_id)}`}
                   </p>
+                  {purpose(step.step_id) && <p className="mt-0.5 text-[11px] text-muted">{purpose(step.step_id)}</p>}
                   {Object.keys(step.params).length > 0 && (
                     <pre className="mt-1.5 font-mono text-[10px] leading-relaxed break-all whitespace-pre-wrap text-muted">
                       {JSON.stringify(step.params)}
