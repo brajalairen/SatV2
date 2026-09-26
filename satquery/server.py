@@ -8,6 +8,7 @@ Run it locally with the labelled fake model:
     SATQUERY_VLM_BACKEND=fake uvicorn satquery.server:app --reload
 """
 
+import json
 import re
 import threading
 import uuid
@@ -23,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from satquery import geo
+from satquery.agent.intents import find_target, needs_multiple_dates
 from satquery.api import analyze
 from satquery.evidence import save_png
 from satquery.examples import EXAMPLE_QUERIES, EXAMPLES_DIR, load_scenarios
@@ -154,6 +156,27 @@ class AnalyzeResult(BaseModel):
     upload_ids: list[str] = Field(default_factory=list)
 
 
+class FetchImageryRequest(BaseModel):
+    """Retrieve imagery for a drawn area so the user need not upload a GeoTIFF.
+
+    The query is carried so the band set can suit the question and so a query needing two dates is
+    refused before any API call rather than answered from a single scene.
+    """
+
+    query: str = Field(min_length=1, max_length=2000)
+    aoi_bbox: tuple[float, float, float, float]  # west, south, east, north
+    days_back: int | None = Field(default=None, ge=1, le=365)
+    max_cloud: float | None = Field(default=None, ge=0, le=100)
+
+
+class FetchImageryResult(BaseModel):
+    """A retrieved scene, registered as an ordinary upload the existing pipeline can analyse."""
+
+    upload: UploadInfo
+    metadata: dict  # SceneMetadata: provider, satellite, date, cloud cover, bands, CRS, ...
+    cached: bool = False
+
+
 class Example(BaseModel):
     index: int
     label: str
@@ -166,6 +189,10 @@ class Health(BaseModel):
     vlm_backend: str
     device: str
     model_is_fake: bool  # surfaced in the UI: a fake backend must never look like the real model
+    # Whether imagery can be fetched for a drawn area. A boolean only: no credential value is ever
+    # exposed by this endpoint, and the frontend needs nothing more than "is the feature available".
+    imagery_provider: str | None = None
+    imagery_available: bool = False
 
 
 # --------------------------------------------------------------------------- helpers
@@ -338,7 +365,10 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
     def health() -> Health:
         current = load_settings()
         return Health(vlm_backend=current.vlm_backend, device=current.device,
-                      model_is_fake=current.vlm_backend == "fake")
+                      model_is_fake=current.vlm_backend == "fake",
+                      imagery_provider="Copernicus Data Space Ecosystem"
+                      if current.copernicus_configured else None,
+                      imagery_available=current.copernicus_configured)
 
     @app.get("/api/examples", response_model=list[Example])
     def examples() -> list[Example]:
@@ -382,6 +412,60 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
             target.parent.rmdir()
             raise HTTPException(413, too_large)
         return _register(store, target, name, modality, (acquired or "").strip() or None, settings)
+
+    @app.post("/api/fetch-imagery", response_model=FetchImageryResult)
+    def fetch_imagery(request: FetchImageryRequest) -> FetchImageryResult:
+        """Retrieve Sentinel-2 L2A imagery for a drawn area and register it like an upload.
+
+        Deliberately separate from /api/analyze: retrieval failures stay distinguishable from
+        analysis failures, and the client can show real progress between the two steps. The result
+        is an ordinary upload id, so the analysis path below is completely unchanged.
+        """
+        from satquery.providers.copernicus import CopernicusSentinelProvider, bands_for_target
+        from satquery.providers.errors import QueryNeedsMultipleDates, RetrievalError
+
+        current = load_settings()
+
+        # Refuse before spending a request: one scene can never answer a two-date question.
+        # COMPATIBLE_TASKS allows change_analysis only for pair_bitemporal, so this is a structural
+        # limit, not a policy choice (CLAUDE.md section 7: never fake an answer).
+        phrase = needs_multiple_dates(request.query)
+        if phrase:
+            problem = QueryNeedsMultipleDates(
+                f'"{phrase}" asks about change over time, which needs at least two acquisition '
+                "dates. This build retrieves a single, most recent scene. Upload two dated GeoTIFFs "
+                "of the same area to run a bi-temporal change analysis.")
+            return JSONResponse(status_code=problem.status, content=problem.as_payload())
+
+        try:
+            provider = CopernicusSentinelProvider(
+                current.copernicus_client_id, current.copernicus_client_secret,
+                days_back=current.copernicus_days_back, max_cloud=current.copernicus_max_cloud,
+                max_aoi_km2=current.copernicus_max_aoi_km2,
+                resolution_m=current.copernicus_resolution_m)
+
+            target, _ = find_target(request.query)
+            bands = bands_for_target(target)
+            key = provider.cache_key(request.aoi_bbox, bands, days_back=request.days_back,
+                                     max_cloud=request.max_cloud)
+            cache_folder = current.runs_dir / "imagery-cache" / key
+            scene_path, metadata_path = cache_folder / "scene.tif", cache_folder / "metadata.json"
+
+            if scene_path.is_file() and metadata_path.is_file():
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8")) | {"cached": True}
+            else:
+                scene = provider.retrieve(request.aoi_bbox, bands, scene_path,
+                                          days_back=request.days_back, max_cloud=request.max_cloud)
+                metadata = scene.metadata.as_dict()
+                metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        except RetrievalError as problem:
+            # Never fall back to fake imagery: the reason is reported instead.
+            return JSONResponse(status_code=problem.status, content=problem.as_payload())
+
+        name = f"Sentinel-2 L2A {metadata.get('acquired', '')}".strip()
+        upload = _register(store, scene_path, name, "optical", metadata.get("acquired"), current)
+        return FetchImageryResult(upload=upload, metadata=metadata,
+                                  cached=bool(metadata.get("cached")))
 
     @app.get("/api/uploads/{upload_id}/preview.png")
     def upload_preview(upload_id: str) -> FileResponse:

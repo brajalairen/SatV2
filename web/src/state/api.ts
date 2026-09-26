@@ -1,12 +1,22 @@
 /** Typed client for satquery/server.py. Relative URLs: Vite proxies them in dev, FastAPI serves
  *  them directly in production. */
 
-import type { AnalyzeResult, Example, Health, Modality, TaskType, UploadInfo } from "./types";
+import type {
+  AnalyzeResult,
+  Example,
+  FetchImageryResult,
+  Health,
+  Modality,
+  TaskType,
+  UploadInfo,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** Machine-readable cause from the imagery layer (e.g. "aoi_too_large"), when the server sent one. */
+    readonly code: string | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -22,22 +32,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError("Cannot reach the analysis server. Is it running?", 0);
   }
   if (!response.ok) {
-    throw new ApiError(await readError(response), response.status);
+    const { message, code } = await readError(response);
+    throw new ApiError(message, response.status, code);
   }
   return (await response.json()) as T;
 }
 
-/** FastAPI puts a string in `detail` for HTTPException and a list for validation errors. */
-async function readError(response: Response): Promise<string> {
+/** FastAPI puts a string in `detail` for HTTPException and a list for validation errors.
+ *  Imagery retrieval instead answers {code, message}, which carries the reason a user needs
+ *  ("no scene under the cloud limit", "the area is too large"), so that wins when present. */
+async function readError(response: Response): Promise<{ message: string; code: string | null }> {
   try {
     const body = await response.json();
+    if (typeof body?.message === "string" && body.message) {
+      return { message: body.message, code: typeof body?.code === "string" ? body.code : null };
+    }
     const detail = body?.detail;
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail) && detail.length) return detail.map((d) => d?.msg ?? String(d)).join("; ");
+    if (typeof detail === "string") return { message: detail, code: null };
+    if (Array.isArray(detail) && detail.length) {
+      return { message: detail.map((d) => d?.msg ?? String(d)).join("; "), code: null };
+    }
   } catch {
     /* fall through to the status text */
   }
-  return response.statusText || `Request failed (${response.status})`;
+  return { message: response.statusText || `Request failed (${response.status})`, code: null };
 }
 
 export const api = {
@@ -56,6 +74,28 @@ export const api = {
     if (acquired) form.append("acquired", acquired);
     return request<UploadInfo>("/api/uploads", { method: "POST", body: form });
   },
+
+  /**
+   * Retrieve satellite imagery for a drawn area, so a question can be asked without uploading a
+   * GeoTIFF. All the retrieval logic lives on the server: this only carries the request across.
+   * The result is an ordinary upload, which then goes through `analyze` unchanged.
+   */
+  fetchImagery: (
+    query: string,
+    aoiBbox: [number, number, number, number],
+    options: { daysBack?: number | null; maxCloud?: number | null; signal?: AbortSignal } = {},
+  ) =>
+    request<FetchImageryResult>("/api/fetch-imagery", {
+      method: "POST",
+      signal: options.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        aoi_bbox: aoiBbox,
+        days_back: options.daysBack ?? null,
+        max_cloud: options.maxCloud ?? null,
+      }),
+    }),
 
   analyze: (
     query: string,

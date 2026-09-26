@@ -13,7 +13,7 @@ function Elapsed() {
   return <span className="tabular-nums">{seconds} s</span>;
 }
 import { ArrowUp, Plus, SquareDashed } from "lucide-react";
-import { useAppStore, selectAnalysisImages } from "../state/useAppStore";
+import { PROGRESS_LABELS, isRectangle, useAppStore, selectAnalysisImages } from "../state/useAppStore";
 import { api } from "../state/api";
 import { Spinner, Surface, cx, IconButton } from "../ui/primitives";
 import { UploadMenu } from "./UploadMenu";
@@ -27,6 +27,7 @@ export function AICommandBar() {
 
   const layers = useAppStore((s) => s.layers);
   const pending = useAppStore((s) => s.pending);
+  const stage = useAppStore((s) => s.stage);
   const result = useAppStore((s) => s.result);
   const error = useAppStore((s) => s.error);
   const aoi = useAppStore((s) => s.aoi);
@@ -37,9 +38,12 @@ export function AICommandBar() {
   const setPendingQuery = useAppStore((s) => s.setPendingQuery);
 
   const images = selectAnalysisImages(layers);
-  const ready = images.length > 0;
-  // An area with no imagery under it cannot be analysed: there is no imagery catalogue to draw on.
-  const areaWithoutImagery = Boolean(aoi) && !ready;
+  const hasImages = images.length > 0;
+  // With no imagery loaded, a drawn rectangle can fetch its own: the question is answerable.
+  const canFetchForArea = !hasImages && isRectangle(aoi);
+  const ready = hasImages || canFetchForArea;
+  // A circle or polygon with nothing under it: retrieval takes a box, so say so rather than convert.
+  const areaShapeUnsupported = !hasImages && Boolean(aoi) && !isRectangle(aoi);
 
   useEffect(() => {
     api.exampleQueries().then(setSuggestions).catch(() => setSuggestions([]));
@@ -89,11 +93,22 @@ export function AICommandBar() {
         </div>
       )}
 
-      {areaWithoutImagery && !error && (
+      {canFetchForArea && !error && !pending && !result && (
         <Surface className="pointer-events-auto flex max-w-[720px] items-start gap-2.5 px-3 py-2.5">
           <SquareDashed className="mt-0.5 h-4 w-4 shrink-0 text-faint" strokeWidth={1.75} />
           <p className="text-[12px] leading-relaxed text-muted">
-            Area selected. This build has no imagery catalogue, so an area on its own has nothing to analyse{" "}
+            Area selected. Ask a question and Sentinel-2 imagery will be fetched for it from{" "}
+            <span className="text-ink">Copernicus Data Space</span>, or add your own GeoTIFF with{" "}
+            <strong className="font-medium text-ink">+</strong>.
+          </p>
+        </Surface>
+      )}
+
+      {areaShapeUnsupported && !error && (
+        <Surface className="pointer-events-auto flex max-w-[720px] items-start gap-2.5 px-3 py-2.5">
+          <SquareDashed className="mt-0.5 h-4 w-4 shrink-0 text-faint" strokeWidth={1.75} />
+          <p className="text-[12px] leading-relaxed text-muted">
+            Fetching imagery supports rectangles only. Draw a rectangle over this area,{" "}
             <button
               type="button"
               onClick={() => openSection("help")}
@@ -101,7 +116,7 @@ export function AICommandBar() {
             >
               try a demo scenario
             </button>{" "}
-            or add a GeoTIFF that covers it with <strong className="font-medium text-ink">+</strong>.
+            or add a GeoTIFF that covers the shape with <strong className="font-medium text-ink">+</strong>.
           </p>
         </Surface>
       )}
@@ -112,12 +127,13 @@ export function AICommandBar() {
         </Surface>
       )}
 
-      {/* A real model can take a minute: show that work is happening, and let it be abandoned. */}
+      {/* A real model can take a minute: show which step is running, and let it be abandoned.
+          Retrieval adds two steps before the analysis, so one generic spinner would hide them. */}
       {pending && (
         <Surface role="status" className="pointer-events-auto flex items-center gap-2.5 py-1.5 pr-1.5 pl-3 text-[12px] text-muted">
           <Spinner className="h-3.5 w-3.5 text-accent" />
           <span>
-            Analysing <Elapsed />
+            {stage ? PROGRESS_LABELS[stage] : "Analysing"} <Elapsed />
           </span>
           <button
             type="button"
@@ -156,11 +172,13 @@ export function AICommandBar() {
               }
             }}
             placeholder={
-              ready
+              hasImages
                 ? aoi
                   ? "Ask about the selected area..."
                   : "Ask anything about these images..."
-                : "Add an image to get started..."
+                : canFetchForArea
+                  ? "Ask about this area, and imagery will be fetched for it..."
+                  : "Add an image or select an area to get started..."
             }
             aria-label="Ask a question about your imagery"
             className="max-h-[120px] flex-1 resize-none self-center bg-transparent px-2 py-2 text-[14px] leading-snug text-ink placeholder:text-faint focus:outline-none disabled:opacity-60"
@@ -188,11 +206,15 @@ export function AICommandBar() {
           </IconButton>
         </Surface>
 
-        {/* Which images the next question runs on: never a hidden choice. */}
+        {/* What the next question runs on: never a hidden choice. With no image loaded, the
+            selected area fetches its own imagery, so there is no file name to name yet. */}
         {ready && (
           <p className="mt-1.5 truncate text-center text-[11px] text-faint">
-            {aoi ? "Analysing the selected area of " : "Analysing "}
-            {images.length === 1 ? images[0]!.name : `${images[0]!.name} and ${images[1]!.name}`}
+            {!hasImages
+              ? "Fetching Sentinel-2 imagery for the selected area"
+              : `${aoi ? "Analysing the selected area of " : "Analysing "}${
+                  images.length === 1 ? images[0]!.name : `${images[0]!.name} and ${images[1]!.name}`
+                }`}
           </p>
         )}
       </div>

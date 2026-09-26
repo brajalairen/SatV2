@@ -86,9 +86,10 @@ export function HelpPanel() {
 
       <div className="mt-5 border-t border-line pt-3 text-[11px] leading-relaxed text-faint">
         <p>
-          <strong className="font-medium text-muted">What this build does not do.</strong> It does not search or
-          download satellite imagery. There is no imagery catalogue, so filtering by source, resolution or cloud cover
-          is switched off. Analysis runs on the files you provide.
+          <strong className="font-medium text-muted">What this build does not do.</strong> Imagery retrieval covers
+          Sentinel-2 L2A only, for a drawn rectangle, at a single date: it cannot answer questions about change over
+          time, and the source, resolution and cloud-cover filters below are not wired to it. Everything else runs on
+          the files you provide.
         </p>
         <p className="mt-2">
           Confidence values are uncalibrated and every one states the method that produced it. Several tools are

@@ -158,4 +158,42 @@ export interface Health {
   device: string;
   /** true when a labelled stand-in is answering instead of the real model. */
   model_is_fake: boolean;
+  /** Imagery source name when retrieval is configured, else null. Never a credential. */
+  imagery_provider: string | null;
+  /** Whether imagery can be fetched for a drawn area instead of uploading a GeoTIFF. */
+  imagery_available: boolean;
+}
+
+/** Provenance for one retrieved scene. Mirrors satquery.providers.SceneMetadata. */
+export interface SceneMetadata {
+  provider: string;
+  collection: string;
+  satellite: string;
+  product_level: string;
+  acquired: string;
+  acquired_datetime: string;
+  cloud_cover: number | null;
+  bbox_wgs84: [number, number, number, number];
+  crs: string;
+  resolution_m: number;
+  bands: string[];
+  width: number;
+  height: number;
+  scene_id: string | null;
+  attribution: string;
+  cached: boolean;
+  alternatives_considered: number;
+}
+
+export interface FetchImageryResult {
+  upload: UploadInfo;
+  metadata: SceneMetadata;
+  cached: boolean;
+}
+
+/** Structured retrieval failure. `code` distinguishes the cause; never contains credentials. */
+export interface RetrievalProblem {
+  code: string;
+  message: string;
+  detail?: string;
 }

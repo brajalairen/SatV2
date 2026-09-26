@@ -8,6 +8,7 @@ import { useAppStore } from "../state/useAppStore";
 import { cx, IconButton, Surface } from "../ui/primitives";
 import { ResultActions } from "./ResultActions";
 import { DetailsDrawer } from "./DetailsDrawer";
+import { SceneProvenance } from "./SceneProvenance";
 import { TemporalAnalysis } from "./TemporalAnalysis";
 import type { ResponseStatus } from "../state/types";
 
@@ -58,6 +59,10 @@ export function ResultOverlay() {
                 <p className="text-[13px] leading-relaxed text-ink">{response.answer}</p>
                 <AreaLine />
                 {response.confidence && <ConfidenceLine />}
+                {/* Renders only when the imagery was fetched rather than uploaded. */}
+                <div className="mt-3">
+                  <SceneProvenance />
+                </div>
                 <OverlayToggles />
               </>
             ) : (

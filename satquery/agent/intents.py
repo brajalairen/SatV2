@@ -20,6 +20,41 @@ CAPTION_CUES = re.compile(r"\b(describe|description|caption|summari[sz]e|overvie
 COMPARATIVE_CUES = re.compile(r"\b(increas\w*|decreas\w*|more|less|grow\w*|grew|expand\w*|shrink\w*|shrunk|reduc\w*|"
                               r"remain\w*|unchanged)\b", re.I)
 
+# Does the query need more than one date to answer? Used to refuse single-date imagery requests
+# honestly instead of answering them from one image: a single scene can never produce
+# change_analysis, which COMPATIBLE_TASKS allows only for pair_bitemporal.
+#
+# Deliberately narrower than "mentions a change word", because three ordinary cases must stay out:
+#   - imperatives are UI commands, not questions ("change the map", "expand the sidebar"), so
+#     `change`/`expand` directly followed by a determiner does not count;
+#   - `compare`/`different` need a comparison phrase ("over time", "from", "between"), so
+#     "a different kind of crop" and "show me a different view" do not count;
+#   - present-tense "growing" describes vegetation ("what crops are growing here"), so only the
+#     past forms `grew`/`grown` count, while `expansion`/`expanded` do imply two moments.
+TEMPORAL_CUES = re.compile(
+    r"\b(?:"
+    r"chang(?:e[ds]?|ing)\b(?!\s+(?:the|this|that|my|a|an|to|it)\b)"
+    r"|unchanged|changes\b"
+    r"|compar(?:e|ed|ing|ison)\b\s*(?:.*\b(?:over time|to|with|against|between)\b|$)"
+    r"|differen(?:ce|ces|t)\b\s*(?:.*\b(?:from|to|between|since|over time)\b)"
+    r"|\b(?:before|after)\b\s*(?:and|/|vs|versus|\?|$)"
+    r"|\bover time\b|\bsince\b\s+\d{4}|\bbetween\b\s+\d{4}"
+    r"|\b(?:increas|decreas|shrink|shrunk|reduc)\w*\b"
+    r"|expan(?:ded|ding|sion)\b|\bexpand\b(?!\s+(?:the|this|that|my|a|an|it)\b)"
+    r"|\b(?:grew|grown)\b"
+    r"|\bbi-?temporal\b|\btime series\b|\bhistorical\b|\bdeforestation\b"
+    r")", re.I)
+
+
+def needs_multiple_dates(query: str) -> str | None:
+    """The temporal phrase that makes `query` unanswerable from a single image, or None.
+
+    Returns the matched text so a refusal can quote the user's own words back rather than
+    being generic.
+    """
+    match = TEMPORAL_CUES.search(query)
+    return match.group(0).strip() if match else None
+
 
 def find_target(query: str) -> tuple[str | None, bool]:
     """Return (canonical target, is_area_class). Specific objects win over area classes."""

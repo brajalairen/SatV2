@@ -34,6 +34,9 @@ dev = ["pytest>=8", "httpx2>=0.28"]  # httpx2: starlette TestClient (tests/test_
 # SIH R5 LoRA adaptation (D-027). Install with --no-deps: peft resolves its own transformers floor,
 # and letting it move transformers past 4.50 breaks Falcon's remote code (D-021).
 adaptation = ["peft==0.17.1", "accelerate==1.10.1"]
+# Copernicus Data Space imagery retrieval. httpx: HTTP client; python-dotenv: reads the
+# gitignored .env holding COPERNICUS_CLIENT_ID / COPERNICUS_CLIENT_SECRET.
+copernicus = ["httpx>=0.27", "python-dotenv>=1.0"]
 data = ["pandas>=2.2", "pyarrow>=16"]  # scripts/build_round1_subset.py, scripts/inspect_bigearthnet.py
 
 [project.scripts]
@@ -44,5 +47,6 @@ include = ["satquery*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["gpu: needs a GPU and downloaded model weights"]
-addopts = "-m 'not gpu'"
+markers = ["gpu: needs a GPU and downloaded model weights",
+           "live: calls a real external API (Copernicus); consumes quota"]
+addopts = "-m 'not gpu and not live'"

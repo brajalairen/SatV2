@@ -3,13 +3,29 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { areaGeometry, selectAnalysisImages, temporalReadiness, useAppStore, type Aoi, type Layer } from "./useAppStore";
+import {
+  areaGeometry,
+  isRectangle,
+  selectAnalysisImages,
+  temporalReadiness,
+  useAppStore,
+  type Aoi,
+  type Layer,
+} from "./useAppStore";
 import type { AnalyzeResult, UploadInfo } from "./types";
 
 const analyze = vi.fn();
+const fetchImagery = vi.fn();
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
-  return { ...actual, api: { ...actual.api, analyze: (...args: unknown[]) => analyze(...args) } };
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      analyze: (...args: unknown[]) => analyze(...args),
+      fetchImagery: (...args: unknown[]) => fetchImagery(...args),
+    },
+  };
 });
 
 function upload(id: string, extra: Partial<UploadInfo> = {}): Layer {
@@ -47,10 +63,20 @@ function result(uploadIds: string[]): AnalyzeResult {
   } as AnalyzeResult;
 }
 
+/** A rectangle: every corner sits on the bounding box, so imagery can be fetched for it. */
 const polygonAoi = (): Aoi => ({
   feature: {
     type: "Feature", properties: {},
     geometry: { type: "Polygon", coordinates: [[[10, 50], [11, 50], [11, 51], [10, 51], [10, 50]]] },
+  },
+  bounds: [10, 50, 11, 51],
+});
+
+/** A triangle: encloses an area, but its corners do not trace its bounding box. */
+const triangleAoi = (): Aoi => ({
+  feature: {
+    type: "Feature", properties: {},
+    geometry: { type: "Polygon", coordinates: [[[10, 50], [11, 50], [10.5, 51], [10, 50]]] },
   },
   bounds: [10, 50, 11, 51],
 });
@@ -70,8 +96,12 @@ function analyseOptions(): { aoiBbox: unknown; aoiGeometry: unknown } {
 
 beforeEach(() => {
   analyze.mockReset();
+  fetchImagery.mockReset();
   analyze.mockResolvedValue(result(["a"]));
-  useAppStore.setState({ layers: [], aoi: null, result: null, error: null, pending: false, drawMode: null });
+  useAppStore.setState({
+    layers: [], aoi: null, result: null, error: null, pending: false, drawMode: null,
+    stage: null, scene: null,
+  });
 });
 
 describe("choosing what to analyse", () => {
@@ -118,12 +148,13 @@ describe("the drawn area that reaches the backend", () => {
     expect(analyseOptions().aoiGeometry).toBeNull();
   });
 
-  it("refuses to analyse an area with no imagery under it", async () => {
-    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+  it("asks for nothing when neither an image nor an area is present", async () => {
+    useAppStore.setState({ layers: [], aoi: null });
     await useAppStore.getState().runAnalysis("what is here?");
 
     expect(analyze).not.toHaveBeenCalled();
-    expect(useAppStore.getState().error).toMatch(/no imagery catalogue/);
+    expect(fetchImagery).not.toHaveBeenCalled();
+    expect(useAppStore.getState().error).toMatch(/add an image|select an area/i);
   });
 });
 
@@ -193,5 +224,159 @@ describe("areas saved in the browser", () => {
     const fresh = await import("./useAppStore");
 
     expect(fresh.useAppStore.getState().savedAreas.map((area) => area.name)).toEqual(["a box"]);
+  });
+});
+
+
+describe("fetching imagery for a drawn area", () => {
+  /** What /api/fetch-imagery answers with: an ordinary upload plus the scene's provenance. */
+  function fetched(id = "fetched-1") {
+    return {
+      upload: { ...upload(id), name: "Sentinel-2 L2A 2026-09-05", acquired: "2026-09-05" },
+      cached: false,
+      metadata: {
+        provider: "Copernicus Data Space Ecosystem", collection: "sentinel-2-l2a",
+        satellite: "Sentinel-2", product_level: "L2A", acquired: "2026-09-05",
+        acquired_datetime: "2026-09-05T05:53:55Z", cloud_cover: 41.96,
+        bbox_wgs84: [10, 50, 11, 51] as [number, number, number, number],
+        crs: "EPSG:4326", resolution_m: 10,
+        bands: ["B02 (blue)"], width: 1052, height: 1106, scene_id: "S2A_TEST",
+        attribution: "Contains modified Copernicus Sentinel data", cached: false,
+        alternatives_considered: 7,
+      },
+    };
+  }
+
+  it("recognises a rectangle, and only a rectangle", () => {
+    expect(isRectangle(polygonAoi())).toBe(true);
+    expect(isRectangle(triangleAoi())).toBe(false);
+    expect(isRectangle(pointAoi())).toBe(false);
+    expect(isRectangle(null)).toBe(false);
+  });
+
+  it("retrieves imagery, then analyses it through the existing path", async () => {
+    fetchImagery.mockResolvedValue(fetched());
+    analyze.mockResolvedValue(result(["fetched-1"]));
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+
+    await useAppStore.getState().runAnalysis("are there water bodies here?");
+
+    expect(fetchImagery).toHaveBeenCalledTimes(1);
+    expect(fetchImagery.mock.calls[0]?.[1]).toEqual([10, 50, 11, 51]);
+    // the retrieved scene is analysed as an ordinary upload
+    expect(analyze.mock.calls[0]?.[1]).toEqual([
+      { upload_id: "fetched-1", modality: "optical", acquired: "2026-09-05" },
+    ]);
+    expect(useAppStore.getState().result).not.toBeNull();
+    expect(useAppStore.getState().pending).toBe(false);
+    expect(useAppStore.getState().stage).toBeNull();
+  });
+
+  it("keeps the scene's provenance for the result card", async () => {
+    fetchImagery.mockResolvedValue(fetched());
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+
+    await useAppStore.getState().runAnalysis("what is here?");
+
+    const scene = useAppStore.getState().scene;
+    expect(scene?.satellite).toBe("Sentinel-2");
+    expect(scene?.acquired).toBe("2026-09-05");
+    expect(scene?.cloud_cover).toBe(41.96);
+  });
+
+  it("adds the retrieved raster to the map as a layer of its own", async () => {
+    fetchImagery.mockResolvedValue(fetched());
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+
+    await useAppStore.getState().runAnalysis("what is here?");
+
+    expect(useAppStore.getState().layers.map((l) => l.id)).toEqual(["fetched-1"]);
+  });
+
+  it("does not fetch when imagery is already loaded: upload stays the fallback", async () => {
+    useAppStore.setState({ layers: [upload("a")], aoi: polygonAoi() });
+    await useAppStore.getState().runAnalysis("what is here?");
+
+    expect(fetchImagery).not.toHaveBeenCalled();
+    expect(analyseOptions().aoiBbox).toEqual([10, 50, 11, 51]);
+  });
+
+  it("refuses a circle or polygon rather than silently using its box", async () => {
+    useAppStore.setState({ layers: [], aoi: triangleAoi() });
+    await useAppStore.getState().runAnalysis("what is here?");
+
+    expect(fetchImagery).not.toHaveBeenCalled();
+    expect(useAppStore.getState().error).toMatch(/rectangle/i);
+  });
+
+  it("clears the previous scene when a new analysis starts", async () => {
+    useAppStore.setState({ scene: fetched().metadata, layers: [upload("a")] });
+    await useAppStore.getState().runAnalysis("what is here?");
+    expect(useAppStore.getState().scene).toBeNull();
+  });
+});
+
+describe("when retrieval or analysis fails", () => {
+  const rectangle = () => useAppStore.setState({ layers: [], aoi: polygonAoi() });
+
+  it.each([
+    ["no_imagery_found", 404, "No Sentinel-2 L2A scene matched this area within the search window."],
+    ["aoi_too_large", 413, "The selected area is about 4,626,540 km2, above the 400 km2 limit."],
+    ["credentials_missing", 503, "Copernicus credentials are not configured."],
+    ["needs_multiple_dates", 422, "\"changed\" asks about change over time, which needs two dates."],
+  ])("keeps the server's own wording for %s", async (code, status, message) => {
+    fetchImagery.mockRejectedValue(new ApiError(message, status, code));
+    rectangle();
+
+    await useAppStore.getState().runAnalysis("what is here?");
+
+    const error = useAppStore.getState().error ?? "";
+    expect(error).toContain(message);
+    expect(error).not.toMatch(/failed unexpectedly/);
+    expect(useAppStore.getState().pending).toBe(false);
+    expect(useAppStore.getState().stage).toBeNull();
+  });
+
+  it("says retrieval failed, not that the analysis did", async () => {
+    fetchImagery.mockRejectedValue(new ApiError("Copernicus timed out.", 504, "provider_timeout"));
+    rectangle();
+
+    await useAppStore.getState().runAnalysis("what is here?");
+
+    expect(useAppStore.getState().error).toMatch(/could not get imagery/i);
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it("reports an analysis failure without blaming retrieval", async () => {
+    fetchImagery.mockResolvedValue({
+      upload: upload("fetched-1"), cached: false,
+      metadata: { satellite: "Sentinel-2", acquired: "2026-09-05", cloud_cover: 1 },
+    });
+    analyze.mockRejectedValue(new ApiError("The image could not be read.", 400));
+    rectangle();
+
+    await useAppStore.getState().runAnalysis("what is here?");
+
+    const error = useAppStore.getState().error ?? "";
+    expect(error).toContain("The image could not be read.");
+    expect(error).not.toMatch(/could not get imagery/i);
+  });
+
+  it("does not leave the UI stuck when retrieval is cancelled", async () => {
+    let reject: (error: unknown) => void = () => {};
+    fetchImagery.mockReturnValue(new Promise((_resolve, r) => { reject = r; }));
+    rectangle();
+
+    const running = useAppStore.getState().runAnalysis("what is here?");
+    expect(useAppStore.getState().pending).toBe(true);
+    expect(useAppStore.getState().stage).toBe("searching");
+
+    useAppStore.getState().cancelAnalysis();
+    reject(new DOMException("aborted", "AbortError"));
+    await running;
+
+    expect(useAppStore.getState().pending).toBe(false);
+    expect(useAppStore.getState().stage).toBeNull();
+    expect(useAppStore.getState().error).toMatch(/stopped waiting/i);
   });
 });

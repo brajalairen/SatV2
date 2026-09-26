@@ -25,6 +25,7 @@ MIRRORED = {
     "AnalyzeResult": server.AnalyzeResult,
     "UploadInfo": server.UploadInfo,
     "Example": server.Example,
+    "FetchImageryResult": server.FetchImageryResult,
     "Health": server.Health,
 }
 

@@ -2,7 +2,7 @@
  *
  *  Date and modality are real: they become `ImageInput.acquired` and `ImageInput.modality`, which
  *  decide how the agent routes the request. The catalogue-search parameters below them are not
- *  connected to anything and say so, because no imagery catalogue exists in this build. */
+ *  connected to anything and say so: retrieval does not read them (D-023, no fake capability). */
 
 import { ChevronDown, ChevronUp, Eye, EyeOff, ImageOff, Layers, Trash2 } from "lucide-react";
 import { useAppStore, selectAnalysisImages, type Layer } from "../state/useAppStore";
@@ -47,7 +47,7 @@ export function LayersPanel() {
 
       <SectionGroup
         title="Imagery search"
-        note="Not connected in this build - there is no imagery catalogue behind these."
+        note="Not connected in this build. Retrieval always uses Sentinel-2 L2A, the most recent scene under the cloud limit."
       >
         <div className="space-y-3 opacity-60">
           <DisabledField label="Satellite / source" value="Any source" />

@@ -106,8 +106,9 @@ export function AreaSelectionTools() {
       )}
 
       <p className="mt-4 border-t border-line pt-3 text-[11px] leading-relaxed text-faint">
-        A selected area narrows the analysis to the part of your images inside it. It cannot fetch new
-        imagery: this build has no imagery catalogue, so an area over empty map has nothing to analyse.
+        A selected area narrows the analysis to the part of your images inside it. With no image loaded,
+        a <strong className="font-medium text-muted">rectangle</strong> fetches recent Sentinel-2 L2A imagery
+        for itself from Copernicus Data Space; circles and polygons must be drawn over imagery you provide.
       </p>
     </div>
   );

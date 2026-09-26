@@ -1,5 +1,7 @@
 """HTTP contract of satquery/server.py. Uses the fake VLM backend; no GPU, no model weights."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -403,3 +405,150 @@ def test_an_upload_without_a_declared_length_is_capped_while_streaming(small_lim
                                        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
     assert response.status_code == 413
     assert not any((tmp_path / "uploads").rglob("big.tif")), "the partial file is removed"
+
+
+# ------------------------------------------------------------- imagery retrieval (/api/fetch-imagery)
+# Offline: the provider is replaced, so the suite never touches Copernicus or its quota.
+
+BBOX = [72.90, 19.00, 73.00, 19.10]
+
+
+def test_health_reports_imagery_availability_without_exposing_credentials(client, monkeypatch):
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "public-looking-id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "super-secret-value")
+    body = client.get("/api/health").json()
+
+    assert body["imagery_available"] is True
+    assert body["imagery_provider"] == "Copernicus Data Space Ecosystem"
+    serialised = str(body)
+    assert "super-secret-value" not in serialised and "public-looking-id" not in serialised
+
+
+def test_health_reports_imagery_unavailable_without_credentials(client, monkeypatch):
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "")
+    body = client.get("/api/health").json()
+    assert body["imagery_available"] is False and body["imagery_provider"] is None
+
+
+@pytest.mark.parametrize("query", [
+    "What has changed here?",
+    "Has vegetation increased?",
+    "Compare this area over time",
+])
+def test_a_query_needing_two_dates_is_refused_before_any_api_call(client, monkeypatch, query):
+    """Never answer a temporal question from one scene: explain instead (CLAUDE.md section 7)."""
+    def explode(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("no provider call should happen for a temporal query")
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", explode)
+    response = client.post("/api/fetch-imagery", json={"query": query, "aoi_bbox": BBOX})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "needs_multiple_dates"
+    assert "two" in body["message"].lower() or "bi-temporal" in body["message"].lower()
+
+
+def test_an_ordinary_question_is_not_refused_as_temporal(client, monkeypatch):
+    """The guard must not swallow normal queries: this one fails later, for a different reason."""
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "")
+    response = client.post("/api/fetch-imagery",
+                           json={"query": "Are there water bodies here?", "aoi_bbox": BBOX})
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "credentials_missing"
+
+
+def test_missing_credentials_are_reported_not_faked(client, monkeypatch):
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "")
+    body = client.post("/api/fetch-imagery",
+                       json={"query": "What is in this area?", "aoi_bbox": BBOX}).json()
+
+    assert body["code"] == "credentials_missing"
+    assert "COPERNICUS_CLIENT_ID" in body["message"], "should say what to configure"
+
+
+def test_a_retrieval_failure_never_falls_back_to_fake_imagery(client, monkeypatch):
+    from satquery.providers.errors import NoImageryFound
+
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+
+    def no_scenes(*args, **kwargs):
+        raise NoImageryFound("No Sentinel-2 L2A scene matched this area.")
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", no_scenes)
+    response = client.post("/api/fetch-imagery",
+                           json={"query": "What is in this area?", "aoi_bbox": BBOX})
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "no_imagery_found"
+
+
+def test_a_retrieved_scene_becomes_an_ordinary_upload_and_analyses(client, monkeypatch, tmp_path, write_tiff, scene):
+    """The whole point of the acquisition layer: retrieval produces a normal upload id."""
+    from satquery.providers import RetrievedScene, SceneMetadata
+
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    source = write_tiff("fetched.tif", scene, ["blue", "green", "red", "nir"])
+
+    def fake_retrieve(self, bbox, bands, destination, **kwargs):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(Path(source).read_bytes())
+        return RetrievedScene(path=destination, metadata=SceneMetadata(
+            provider="Copernicus Data Space Ecosystem", collection="sentinel-2-l2a",
+            satellite="Sentinel-2", product_level="L2A", acquired="2026-09-14",
+            acquired_datetime="2026-09-14T05:20:11Z", cloud_cover=4.25, bbox_wgs84=tuple(bbox),
+            crs="EPSG:4326", resolution_m=10.0, bands=["B02 (blue)"], width=32, height=32,
+            scene_id="S2B_TEST", alternatives_considered=3))
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", fake_retrieve)
+    fetched = client.post("/api/fetch-imagery",
+                          json={"query": "Are there water bodies here?", "aoi_bbox": BBOX})
+    assert fetched.status_code == 200, fetched.text
+    body = fetched.json()
+
+    assert body["metadata"]["satellite"] == "Sentinel-2"
+    assert body["metadata"]["acquired"] == "2026-09-14"
+    assert body["metadata"]["cloud_cover"] == 4.25
+    upload_id = body["upload"]["id"]
+
+    # the existing analysis path, unchanged
+    analysed = client.post("/api/analyze", json={
+        "query": "Are there water bodies here?",
+        "images": [{"upload_id": upload_id, "modality": "optical"}],
+    })
+    assert analysed.status_code == 200, analysed.text
+    assert analysed.json()["response"]["status"] in ("ok", "inconclusive")
+
+
+def test_a_second_identical_request_is_served_from_cache(client, monkeypatch, write_tiff, scene):
+    from satquery.providers import RetrievedScene, SceneMetadata
+
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    source = write_tiff("cached.tif", scene, ["blue", "green", "red", "nir"])
+    calls = []
+
+    def fake_retrieve(self, bbox, bands, destination, **kwargs):
+        calls.append(bbox)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(Path(source).read_bytes())
+        return RetrievedScene(path=destination, metadata=SceneMetadata(
+            provider="Copernicus Data Space Ecosystem", collection="sentinel-2-l2a",
+            satellite="Sentinel-2", product_level="L2A", acquired="2026-09-14",
+            acquired_datetime="2026-09-14T05:20:11Z", cloud_cover=1.0, bbox_wgs84=tuple(bbox),
+            crs="EPSG:4326", resolution_m=10.0, bands=["B02 (blue)"], width=32, height=32))
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve", fake_retrieve)
+    payload = {"query": "What is in this area?", "aoi_bbox": BBOX}
+
+    first = client.post("/api/fetch-imagery", json=payload).json()
+    second = client.post("/api/fetch-imagery", json=payload).json()
+
+    assert len(calls) == 1, "the second identical request must not hit the API again"
+    assert first["cached"] is False and second["cached"] is True
