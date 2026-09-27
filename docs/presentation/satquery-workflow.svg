@@ -1,0 +1,357 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" font-family="'Segoe UI', Inter, 'Helvetica Neue', Arial, sans-serif">
+<title>SatQuery AI: End-to-End Workflow</title>
+<rect x="0" y="0" width="1920" height="1080" rx="0" fill="#FFFFFF"/>
+<text x="28" y="50" font-size="30" font-weight="700" fill="#0F172A">SatQuery AI · End-to-End Workflow</text>
+<rect x="862" y="31" width="16" height="16" rx="4" fill="#EFF6FF" stroke="#2563EB" stroke-width="1.5"/>
+<text x="885" y="44" font-size="14" font-weight="500" fill="#475569">Input &amp; user</text>
+<rect x="998.36" y="31" width="16" height="16" rx="4" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5"/>
+<text x="1021.36" y="44" font-size="14" font-weight="500" fill="#475569">AI agent</text>
+<rect x="1105.6" y="31" width="16" height="16" rx="4" fill="#FFFBEB" stroke="#D97706" stroke-width="1.5"/>
+<text x="1128.6" y="44" font-size="14" font-weight="500" fill="#475569">Data sources</text>
+<rect x="1241.96" y="31" width="16" height="16" rx="4" fill="#F8FAFC" stroke="#475569" stroke-width="1.5"/>
+<text x="1264.96" y="44" font-size="14" font-weight="500" fill="#475569">Processing</text>
+<rect x="1363.76" y="31" width="16" height="16" rx="4" fill="#ECFEFF" stroke="#0891B2" stroke-width="1.5"/>
+<text x="1386.76" y="44" font-size="14" font-weight="500" fill="#475569">Analysis</text>
+<rect x="1471" y="31" width="16" height="16" rx="4" fill="#F0FDF4" stroke="#16A34A" stroke-width="1.5"/>
+<text x="1494" y="44" font-size="14" font-weight="500" fill="#475569">Results &amp; output</text>
+<circle cx="1645.48" cy="39" r="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.2"/>
+<text x="1645.48" y="43.5" font-size="12" font-weight="700" fill="#475569" text-anchor="middle">H</text>
+<text x="1661.48" y="44" font-size="14" font-weight="500" fill="#475569">heuristic (rules / thresholds)</text>
+<rect x="28" y="74" width="560" height="148" rx="16" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1.5"/>
+<circle cx="60" cy="104" r="17" fill="#2563EB"/>
+<g transform="translate(50 94) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g>
+<text x="86" y="110" font-size="17" font-weight="700" fill="#1E3A8A" letter-spacing="0.4">1 · USER INPUT</text>
+<g transform="translate(48 133) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7"/><path d="M17 12H7"/></g>
+<text x="72" y="146" font-size="15" fill="#1E293B">Natural-language question</text>
+<g transform="translate(48 158) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M12 17.5c-2.5-2.2-4-4.3-4-6.2a4 4 0 0 1 8 0c0 1.9-1.5 4-4 6.2z"/><circle cx="12" cy="11.3" r="1.3"/></g>
+<text x="72" y="171" font-size="15" fill="#1E293B">Draw AOI: rectangle, circle, polygon</text>
+<g transform="translate(48 183) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></g>
+<text x="72" y="196" font-size="15" fill="#1E293B">Place search (OpenStreetMap)</text>
+<g transform="translate(344 133) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></g>
+<text x="368" y="146" font-size="15" fill="#1E293B">GeoTIFF upload (optional)</text>
+<g transform="translate(344 158) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></g>
+<text x="368" y="171" font-size="15" fill="#1E293B">Suggested questions</text>
+<rect x="634" y="74" width="560" height="148" rx="16" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1.5"/>
+<circle cx="666" cy="104" r="17" fill="#7C3AED"/>
+<g transform="translate(656 94) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 6H3"/><path d="M10 12H3"/><path d="M10 18H3"/><circle cx="17" cy="15" r="3"/><path d="m21 19-1.9-1.9"/></g>
+<rect x="1080.6" y="92" width="99.4" height="24" rx="12" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.2"/>
+<text x="1130.3" y="108.7" font-size="13" font-weight="600" fill="#7C3AED" text-anchor="middle">rule-based</text>
+<text x="692" y="110" font-size="17" font-weight="700" fill="#4C1D95" letter-spacing="0.4">2 · QUERY UNDERSTANDING</text>
+<g transform="translate(654 133) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></g>
+<text x="678" y="146" font-size="15" fill="#1E293B">Intent → task type</text>
+<g transform="translate(654 158) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></g>
+<text x="678" y="171" font-size="15" fill="#1E293B">AOI from the map</text>
+<g transform="translate(654 183) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M22 12h-4"/><path d="M6 12H2"/><path d="M12 6V2"/><path d="M12 22v-4"/></g>
+<text x="678" y="196" font-size="15" fill="#1E293B">Target: water, buildings, …</text>
+<g transform="translate(924 133) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></g>
+<text x="948" y="146" font-size="15" fill="#1E293B">Sensor: optical, SAR or both</text>
+<g transform="translate(924 158) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></g>
+<text x="948" y="171" font-size="15" fill="#1E293B">Dates: single or before/after</text>
+<g transform="translate(924 183) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/></g>
+<text x="948" y="196" font-size="15" fill="#1E293B">Weather or imagery?</text>
+<rect x="1240" y="74" width="606" height="148" rx="16" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1.5"/>
+<circle cx="1272" cy="104" r="17" fill="#7C3AED"/>
+<g transform="translate(1262 94) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+<rect x="1672.28" y="92" width="159.72" height="24" rx="12" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.2"/>
+<text x="1752.14" y="108.7" font-size="13" font-weight="600" fill="#7C3AED" text-anchor="middle">rule-based planner</text>
+<text x="1298" y="110" font-size="17" font-weight="700" fill="#4C1D95" letter-spacing="0.4">3 · AGENT ORCHESTRATOR</text>
+<g transform="translate(1260 133) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/></g>
+<text x="1284" y="146" font-size="15" fill="#1E293B">Choose workflow &amp; plan tools</text>
+<g transform="translate(1260 158) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></g>
+<text x="1284" y="171" font-size="15" fill="#1E293B">Permitted parameters only</text>
+<g transform="translate(1260 183) scale(0.666667)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></g>
+<text x="1284" y="196" font-size="15" fill="#1E293B">Every step logged (trace)</text>
+<rect x="1558" y="126" width="272" height="86" rx="12" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+<text x="1572" y="145" font-size="12.5" font-weight="700" fill="#4C1D95" letter-spacing="0.4">TOOL REGISTRY · 14 TOOLS</text>
+<rect x="1572" y="154" width="76" height="23" rx="11.5" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+<text x="1610" y="170" font-size="13" font-weight="600" fill="#4C1D95" text-anchor="middle">VLM ×6</text>
+<rect x="1656" y="154" width="76" height="23" rx="11.5" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+<text x="1694" y="170" font-size="13" font-weight="600" fill="#4C1D95" text-anchor="middle">SAR ×3</text>
+<rect x="1740" y="154" width="76" height="23" rx="11.5" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+<text x="1778" y="170" font-size="13" font-weight="600" fill="#4C1D95" text-anchor="middle">Change ×2</text>
+<rect x="1572" y="182" width="76" height="23" rx="11.5" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+<text x="1610" y="198" font-size="13" font-weight="600" fill="#4C1D95" text-anchor="middle">Optical ×1</text>
+<rect x="1656" y="182" width="76" height="23" rx="11.5" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+<text x="1694" y="198" font-size="13" font-weight="600" fill="#4C1D95" text-anchor="middle">Fusion ×1</text>
+<rect x="1740" y="182" width="76" height="23" rx="11.5" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+<text x="1778" y="198" font-size="13" font-weight="600" fill="#4C1D95" text-anchor="middle">Weather ×1</text>
+<path d="M588 148 L625 148" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="634,148 624,154 624,142" fill="#64748B"/>
+<path d="M1194 148 L1231 148" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="1240,148 1230,154 1230,142" fill="#64748B"/>
+<polygon points="937,236 1087,280 937,324 787,280" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2" stroke-linejoin="round"/>
+<text x="937" y="276" font-size="17" font-weight="700" fill="#4C1D95" text-anchor="middle">What does the</text>
+<text x="937" y="297" font-size="17" font-weight="700" fill="#4C1D95" text-anchor="middle">query require?</text>
+<path d="M1543 222 L1543 280 L1096 280" fill="none" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="1087,280 1097,274 1097,286" fill="#7C3AED"/>
+<rect x="1242.68" y="268" width="144.64" height="24" rx="12" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.2"/>
+<text x="1315" y="284.68" font-size="13" font-weight="600" fill="#7C3AED" text-anchor="middle">routes the query</text>
+<rect x="28" y="236" width="672" height="88" rx="14" fill="#FEF2F2" stroke="#FECACA" stroke-width="1.5"/>
+<g transform="translate(40 248) scale(0.833333)" fill="none" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></g>
+<text x="70" y="264" font-size="15" font-weight="700" fill="#7F1D1D">Refused with a stated reason, never guessed</text>
+<text x="46" y="288" font-size="14" fill="#991B1B">weather + imagery in one question · past or &gt; 16-day weather ·</text>
+<text x="46" y="309" font-size="14" fill="#991B1B">radar change over time · missing optical or SAR · grid mismatch</text>
+<path d="M787 280 L709 280" fill="none" stroke="#DC2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="700,280 710,274 710,286" fill="#DC2626"/>
+<text x="744" y="271" font-size="12.5" font-weight="600" fill="#DC2626" text-anchor="middle">unsupported</text>
+<rect x="28" y="350" width="347" height="102" rx="14" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+<circle cx="54" cy="377" r="13" fill="#7C3AED"/>
+<text x="54" y="382" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle">A</text>
+<text x="76" y="383" font-size="15.5" font-weight="700" fill="#4C1D95" letter-spacing="0.3">SPATIAL · ONE IMAGE</text>
+<g transform="translate(341 367) scale(0.833333)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></g>
+<text x="46" y="413" font-size="14.5" fill="#1E293B">VQA · caption · grounding</text>
+<text x="46" y="436" font-size="14" fill="#475569">Sentinel-2 · S1 for radar / cloudy water</text>
+<rect x="395.75" y="350" width="347" height="102" rx="14" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+<circle cx="421.75" cy="377" r="13" fill="#7C3AED"/>
+<text x="421.75" y="382" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle">B</text>
+<text x="443.75" y="383" font-size="15.5" font-weight="700" fill="#4C1D95" letter-spacing="0.3">TEMPORAL CHANGE</text>
+<g transform="translate(708.75 367) scale(0.833333)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></g>
+<text x="413.75" y="413" font-size="14.5" fill="#1E293B">Before vs after, dates from the query</text>
+<text x="413.75" y="436" font-size="14" fill="#475569">Two Sentinel-2 scenes</text>
+<rect x="763.5" y="350" width="347" height="102" rx="14" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+<circle cx="789.5" cy="377" r="13" fill="#7C3AED"/>
+<text x="789.5" y="382" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle">C</text>
+<text x="811.5" y="383" font-size="15.5" font-weight="700" fill="#4C1D95" letter-spacing="0.3">WEATHER CONTEXT</text>
+<g transform="translate(1076.5 367) scale(0.833333)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M16 14v6"/><path d="M8 14v6"/><path d="M12 16v6"/></g>
+<text x="781.5" y="413" font-size="14.5" fill="#1E293B">Forecast for a point in the AOI</text>
+<text x="781.5" y="436" font-size="14" fill="#475569">Open-Meteo · up to 16 days</text>
+<rect x="1131.25" y="350" width="347" height="102" rx="14" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+<circle cx="1157.25" cy="377" r="13" fill="#7C3AED"/>
+<text x="1157.25" y="382" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle">D</text>
+<text x="1179.25" y="383" font-size="15.5" font-weight="700" fill="#4C1D95" letter-spacing="0.3">UPLOADED GEOTIFF</text>
+<g transform="translate(1444.25 367) scale(0.833333)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><circle cx="10" cy="12" r="2"/><path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/></g>
+<text x="1149.25" y="413" font-size="14.5" fill="#1E293B">Optical, SAR or a co-registered pair</text>
+<text x="1149.25" y="436" font-size="14" fill="#475569">Modality read from band names</text>
+<rect x="1499" y="350" width="347" height="102" rx="14" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+<circle cx="1525" cy="377" r="13" fill="#7C3AED"/>
+<text x="1525" y="382" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle">E</text>
+<text x="1547" y="383" font-size="15.5" font-weight="700" fill="#4C1D95" letter-spacing="0.3">COMBINED / MULTI-STEP</text>
+<g transform="translate(1812 367) scale(0.833333)" fill="none" stroke="#7C3AED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></g>
+<text x="1517" y="413" font-size="14.5" fill="#1E293B">Optical + SAR fused (S2 + nearest S1)</text>
+<text x="1517" y="436" font-size="14" fill="#475569">Several tools chained in one plan</text>
+<path d="M937 324 L937 334" fill="none" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M201.5 334 L1672.5 334" fill="none" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M201.5 334 L201.5 343" fill="none" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="201.5,350 196.5,342 206.5,342" fill="#7C3AED"/>
+<path d="M569.25 334 L569.25 343" fill="none" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="569.25,350 564.25,342 574.25,342" fill="#7C3AED"/>
+<path d="M937 334 L937 343" fill="none" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="937,350 932,342 942,342" fill="#7C3AED"/>
+<path d="M1304.75 334 L1304.75 343" fill="none" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="1304.75,350 1299.75,342 1309.75,342" fill="#7C3AED"/>
+<path d="M1672.5 334 L1672.5 343" fill="none" stroke="#7C3AED" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="1672.5,350 1667.5,342 1677.5,342" fill="#7C3AED"/>
+<path d="M201.5 452 L201.5 467" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M569.25 452 L569.25 467" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M937 452 L937 467" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1304.75 452 L1304.75 467" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1672.5 452 L1672.5 467" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M201.5 467 L1672.5 467" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M450 467 L450 477" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="450,484 445,476 455,476" fill="#64748B"/>
+<rect x="972.28" y="455" width="295.44" height="24" rx="12" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.2"/>
+<text x="1120" y="471.68" font-size="13" font-weight="600" fill="#475569" text-anchor="middle">AOI + chosen workflow → data request</text>
+<rect x="28" y="484" width="844" height="164" rx="16" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1.5"/>
+<circle cx="60" cy="514" r="17" fill="#D97706"/>
+<g transform="translate(50 504) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></g>
+<rect x="683.2" y="502" width="174.8" height="24" rx="12" fill="#FFFFFF" stroke="#FDE68A" stroke-width="1.2"/>
+<text x="770.6" y="518.7" font-size="13" font-weight="600" fill="#D97706" text-anchor="middle">AOI-bounded requests</text>
+<text x="86" y="520" font-size="17" font-weight="700" fill="#78350F" letter-spacing="0.4">4 · DATA LAYER</text>
+<rect x="44" y="536" width="424" height="100" rx="12" fill="#FFFFFF" stroke="#FDE68A" stroke-width="1.5"/>
+<g transform="translate(53 547) scale(0.75)" fill="none" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></g>
+<text x="80" y="562" font-size="15" font-weight="700" fill="#78350F">Copernicus Data Space</text>
+<text x="456" y="562" font-size="13" fill="#475569" text-anchor="end">Catalog + Process API</text>
+<rect x="56" y="574" width="196" height="52" rx="10" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1.2"/>
+<g transform="translate(66 590) scale(0.833333)" fill="none" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 7 9 3 5 7l4 4"/><path d="m17 11 4 4-4 4-4-4"/><path d="m8 12 4 4 6-6-4-4Z"/><path d="m16 8 3-3"/><path d="M9 21a6 6 0 0 0-6-6"/></g>
+<text x="94" y="596" font-size="14.5" font-weight="700" fill="#1E293B">Sentinel-2 L2A</text>
+<text x="94" y="615" font-size="13" fill="#475569">Optical · NIR · SCL</text>
+<rect x="264" y="574" width="192" height="52" rx="10" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1.2"/>
+<g transform="translate(274 590) scale(0.833333)" fill="none" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/></g>
+<text x="302" y="596" font-size="14.5" font-weight="700" fill="#1E293B">Sentinel-1 GRD</text>
+<text x="302" y="615" font-size="13" fill="#475569">SAR · VV + VH</text>
+<rect x="482" y="536" width="186" height="100" rx="12" fill="#FFFFFF" stroke="#FDE68A" stroke-width="1.5"/>
+<g transform="translate(493 549) scale(0.75)" fill="none" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><circle cx="10" cy="12" r="2"/><path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/></g>
+<text x="520" y="563" font-size="15" font-weight="700" fill="#78350F">User GeoTIFF</text>
+<text x="498" y="594" font-size="13.5" fill="#1E293B">Optical, SAR or pairs</text>
+<text x="498" y="616" font-size="13.5" fill="#475569">+ BigEarthNet demos</text>
+<rect x="682" y="536" width="174" height="100" rx="12" fill="#FFFFFF" stroke="#FDE68A" stroke-width="1.5"/>
+<g transform="translate(693 549) scale(0.75)" fill="none" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M16 14v6"/><path d="M8 14v6"/><path d="M12 16v6"/></g>
+<text x="720" y="563" font-size="15" font-weight="700" fill="#78350F">Open-Meteo</text>
+<text x="698" y="594" font-size="13.5" fill="#1E293B">Weather forecast</text>
+<text x="698" y="616" font-size="13.5" fill="#475569">no key · CC BY 4.0</text>
+<path d="M872 566 L909 566" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="918,566 908,572 908,560" fill="#64748B"/>
+<rect x="918" y="484" width="928" height="164" rx="16" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+<circle cx="950" cy="514" r="17" fill="#475569"/>
+<g transform="translate(940 504) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4h-7"/><path d="M10 4H3"/><path d="M21 12h-9"/><path d="M8 12H3"/><path d="M21 20h-5"/><path d="M12 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/><path d="M16 18v4"/></g>
+<text x="976" y="520" font-size="17" font-weight="700" fill="#1E293B" letter-spacing="0.4">5 · PREPROCESSING</text>
+<rect x="934" y="536" width="284" height="46" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.2"/>
+<g transform="translate(946 550) scale(0.75)" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></g>
+<text x="974" y="556" font-size="14.5" font-weight="700" fill="#1E293B">AOI-bounded retrieval</text>
+<text x="974" y="574" font-size="13" fill="#475569">bbox → Process API · cached</text>
+<path d="M1226 553 L1232 559 L1226 565" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1240" y="536" width="284" height="46" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.2"/>
+<g transform="translate(1252 550) scale(0.75)" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></g>
+<text x="1280" y="556" font-size="14.5" font-weight="700" fill="#1E293B">Cloud check in the AOI</text>
+<text x="1280" y="574" font-size="13" fill="#475569">SCL ≥ 20% → Sentinel-1 (water)</text>
+<path d="M1532 553 L1538 559 L1532 565" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1546" y="536" width="284" height="46" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.2"/>
+<g transform="translate(1558 550) scale(0.75)" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></g>
+<text x="1586" y="556" font-size="14.5" font-weight="700" fill="#1E293B">Temporal pairing</text>
+<text x="1586" y="574" font-size="13" fill="#475569">before / after · nearest S1 date</text>
+<rect x="934" y="590" width="284" height="46" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.2"/>
+<g transform="translate(946 604) scale(0.75)" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></g>
+<text x="974" y="610" font-size="14.5" font-weight="700" fill="#1E293B">Format &amp; band roles</text>
+<text x="974" y="628" font-size="13" fill="#475569">GeoTIFF / PNG · bands · units</text>
+<path d="M1226 607 L1232 613 L1226 619" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1240" y="590" width="284" height="46" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.2"/>
+<g transform="translate(1252 604) scale(0.75)" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></g>
+<text x="1280" y="610" font-size="14.5" font-weight="700" fill="#1E293B">Validate inputs</text>
+<text x="1280" y="628" font-size="13" fill="#475569">CRS · same grid · dates</text>
+<path d="M1532 607 L1538 613 L1532 619" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1546" y="590" width="284" height="46" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.2"/>
+<g transform="translate(1558 604) scale(0.75)" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></g>
+<text x="1586" y="610" font-size="14.5" font-weight="700" fill="#1E293B">Clip / mask to the AOI</text>
+<text x="1586" y="628" font-size="13" fill="#475569">circle &amp; polygon → nodata outside</text>
+<path d="M1382 648 L1382 659" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="1382,668 1376,658 1388,658" fill="#64748B"/>
+<rect x="28" y="668" width="1818" height="200" rx="16" fill="#ECFEFF" stroke="#A5F3FC" stroke-width="1.5"/>
+<circle cx="60" cy="698" r="17" fill="#0891B2"/>
+<g transform="translate(50 688) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="1"/><path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"/></g>
+<text x="86" y="704" font-size="17" font-weight="700" fill="#164E63" letter-spacing="0.4">6 · ANALYSIS ENGINES</text>
+<text x="1830" y="703" font-size="14" fill="#164E63" text-anchor="end" font-style="italic">Combined in one plan when the question needs it: optical + SAR fusion · cloudy → radar fallback · before / after pairs</text>
+<rect x="44" y="718" width="284" height="140" rx="12" fill="#FFFFFF" stroke="#A5F3FC" stroke-width="1.5"/>
+<g transform="translate(56 730) scale(0.833333)" fill="none" stroke="#0891B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></g>
+<text x="84" y="746" font-size="15" font-weight="700" fill="#164E63" letter-spacing="0.3">OPTICAL</text>
+<circle cx="308" cy="740" r="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.2"/>
+<text x="308" y="744.5" font-size="12" font-weight="700" fill="#475569" text-anchor="middle">H</text>
+<circle cx="64" cy="769" r="2.6" fill="#0891B2"/>
+<text x="74" y="774" font-size="14.5" fill="#1E293B">NDWI water-body mask</text>
+<circle cx="64" cy="791.5" r="2.6" fill="#0891B2"/>
+<text x="74" y="796.5" font-size="14.5" fill="#1E293B">NDVI vegetation mask</text>
+<circle cx="64" cy="814" r="2.6" fill="#0891B2"/>
+<text x="74" y="819" font-size="14.5" fill="#1E293B">Needs a near-infrared band</text>
+<rect x="354" y="718" width="284" height="140" rx="12" fill="#FFFFFF" stroke="#A5F3FC" stroke-width="1.5"/>
+<g transform="translate(366 730) scale(0.833333)" fill="none" stroke="#0891B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.172 2.872L4 22"/><path d="m20 22-5-5"/></g>
+<text x="394" y="746" font-size="15" font-weight="700" fill="#164E63" letter-spacing="0.3">MULTIMODAL FUSION</text>
+<circle cx="618" cy="740" r="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.2"/>
+<text x="618" y="744.5" font-size="12" font-weight="700" fill="#475569" text-anchor="middle">H</text>
+<circle cx="374" cy="769" r="2.6" fill="#0891B2"/>
+<text x="384" y="774" font-size="14.5" fill="#1E293B">Optical + SAR agreement (IoU)</text>
+<circle cx="374" cy="791.5" r="2.6" fill="#0891B2"/>
+<text x="384" y="796.5" font-size="14.5" fill="#1E293B">Water &amp; building evidence</text>
+<circle cx="374" cy="814" r="2.6" fill="#0891B2"/>
+<text x="384" y="819" font-size="14.5" fill="#1E293B">Cloudy optical → radar answers</text>
+<rect x="664" y="718" width="284" height="140" rx="12" fill="#FFFFFF" stroke="#A5F3FC" stroke-width="1.5"/>
+<g transform="translate(676 730) scale(0.833333)" fill="none" stroke="#0891B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/></g>
+<text x="704" y="746" font-size="15" font-weight="700" fill="#164E63" letter-spacing="0.3">SAR</text>
+<circle cx="928" cy="740" r="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.2"/>
+<text x="928" y="744.5" font-size="12" font-weight="700" fill="#475569" text-anchor="middle">H</text>
+<circle cx="684" cy="769" r="2.6" fill="#0891B2"/>
+<text x="694" y="774" font-size="14.5" fill="#1E293B">Dark-water mask (Otsu)</text>
+<circle cx="684" cy="791.5" r="2.6" fill="#0891B2"/>
+<text x="694" y="796.5" font-size="14.5" fill="#1E293B">Bright-scatterer mask</text>
+<circle cx="684" cy="814" r="2.6" fill="#0891B2"/>
+<text x="694" y="819" font-size="14.5" fill="#1E293B">Backscatter statistics (dB)</text>
+<rect x="958" y="718" width="284" height="140" rx="12" fill="#FFFFFF" stroke="#A5F3FC" stroke-width="1.5"/>
+<g transform="translate(970 730) scale(0.833333)" fill="none" stroke="#0891B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></g>
+<text x="998" y="746" font-size="15" font-weight="700" fill="#164E63" letter-spacing="0.3">TEMPORAL CHANGE</text>
+<circle cx="1222" cy="740" r="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.2"/>
+<text x="1222" y="744.5" font-size="12" font-weight="700" fill="#475569" text-anchor="middle">H</text>
+<circle cx="978" cy="769" r="2.6" fill="#0891B2"/>
+<text x="988" y="774" font-size="14.5" fill="#1E293B">Change map, one shared scale</text>
+<circle cx="978" cy="791.5" r="2.6" fill="#0891B2"/>
+<text x="988" y="796.5" font-size="14.5" fill="#1E293B">Before-vs-after area (%)</text>
+<circle cx="978" cy="814" r="2.6" fill="#0891B2"/>
+<text x="988" y="819" font-size="14.5" fill="#1E293B">VLM change description</text>
+<rect x="1252" y="718" width="284" height="140" rx="12" fill="#FFFFFF" stroke="#A5F3FC" stroke-width="1.5"/>
+<g transform="translate(1264 730) scale(0.833333)" fill="none" stroke="#0891B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="1"/><path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"/></g>
+<text x="1292" y="746" font-size="15" font-weight="700" fill="#164E63" letter-spacing="0.3">VISION-LANGUAGE MODEL</text>
+<circle cx="1272" cy="769" r="2.6" fill="#0891B2"/>
+<text x="1282" y="774" font-size="14.5" fill="#1E293B">Falcon 0.7B (+ BigEarthNet LoRA)</text>
+<circle cx="1272" cy="791.5" r="2.6" fill="#0891B2"/>
+<text x="1282" y="796.5" font-size="14.5" fill="#1E293B">VQA &amp; scene captioning</text>
+<circle cx="1272" cy="814" r="2.6" fill="#0891B2"/>
+<text x="1282" y="819" font-size="14.5" fill="#1E293B">Object grounding: boxes &amp; masks</text>
+<circle cx="1272" cy="836.5" r="2.6" fill="#0891B2"/>
+<text x="1282" y="841.5" font-size="14.5" fill="#1E293B">Land cover · uploaded GeoTIFFs</text>
+<rect x="1546" y="718" width="284" height="140" rx="12" fill="#FFFFFF" stroke="#A5F3FC" stroke-width="1.5"/>
+<g transform="translate(1558 730) scale(0.833333)" fill="none" stroke="#0891B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></g>
+<text x="1586" y="746" font-size="15" font-weight="700" fill="#164E63" letter-spacing="0.3">WEATHER FORECAST</text>
+<circle cx="1566" cy="769" r="2.6" fill="#0891B2"/>
+<text x="1576" y="774" font-size="14.5" fill="#1E293B">Temperature max / min</text>
+<circle cx="1566" cy="791.5" r="2.6" fill="#0891B2"/>
+<text x="1576" y="796.5" font-size="14.5" fill="#1E293B">Rain amount &amp; probability</text>
+<circle cx="1566" cy="814" r="2.6" fill="#0891B2"/>
+<text x="1576" y="819" font-size="14.5" fill="#1E293B">Wind · today to 16 days</text>
+<path d="M329 788 L345 788" fill="none" stroke="#0891B2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="353,788 344,793.5 344,782.5" fill="#0891B2"/>
+<path d="M663 788 L647 788" fill="none" stroke="#0891B2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="639,788 648,782.5 648,793.5" fill="#0891B2"/>
+<path d="M358 868 L358 881" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="358,890 352,880 364,880" fill="#64748B"/>
+<rect x="28" y="890" width="660" height="172" rx="16" fill="#F0FDF4" stroke="#BBF7D0" stroke-width="1.5"/>
+<circle cx="60" cy="920" r="17" fill="#16A34A"/>
+<g transform="translate(50 910) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></g>
+<text x="86" y="926" font-size="17" font-weight="700" fill="#14532D" letter-spacing="0.4">7 · RESULT &amp; EVIDENCE</text>
+<g transform="translate(48 947) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></g>
+<text x="72" y="960" font-size="15" fill="#1E293B">Detected regions &amp; masks</text>
+<g transform="translate(48 971) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></g>
+<text x="72" y="984" font-size="15" fill="#1E293B">Change statistics (area %)</text>
+<g transform="translate(48 995) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></g>
+<text x="72" y="1008" font-size="15" fill="#1E293B">Before / after pair</text>
+<g transform="translate(48 1019) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></g>
+<text x="72" y="1032" font-size="15" fill="#1E293B">Temperature, rain &amp; wind</text>
+<g transform="translate(366 947) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r="1" fill="#16A34A"/></g>
+<text x="390" y="960" font-size="15" fill="#1E293B">Objects &amp; land-cover classes</text>
+<g transform="translate(366 971) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></g>
+<text x="390" y="984" font-size="15" fill="#1E293B">Confidence + method (uncalibrated)</text>
+<g transform="translate(366 995) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></g>
+<text x="390" y="1008" font-size="15" fill="#1E293B">Evidence: overlays + step trace</text>
+<g transform="translate(366 1019) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7"/><path d="M17 12H7"/></g>
+<text x="390" y="1032" font-size="15" fill="#1E293B">Natural-language explanation</text>
+<rect x="734" y="890" width="660" height="172" rx="16" fill="#F0FDF4" stroke="#86EFAC" stroke-width="2"/>
+<circle cx="766" cy="920" r="17" fill="#16A34A"/>
+<g transform="translate(756 910) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></g>
+<text x="792" y="926" font-size="17" font-weight="700" fill="#14532D" letter-spacing="0.4">8 · VISUAL + TEXT RESPONSE</text>
+<g transform="translate(754 947) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/></g>
+<text x="778" y="960" font-size="15" fill="#1E293B">Overlays pinned on the map</text>
+<g transform="translate(754 971) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M12 17.5c-2.5-2.2-4-4.3-4-6.2a4 4 0 0 1 8 0c0 1.9-1.5 4-4 6.2z"/><circle cx="12" cy="11.3" r="1.3"/></g>
+<text x="778" y="984" font-size="15" fill="#1E293B">Highlighted AOI &amp; detections</text>
+<g transform="translate(754 995) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></g>
+<text x="778" y="1008" font-size="15" fill="#1E293B">Before-and-after imagery</text>
+<g transform="translate(754 1019) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></g>
+<text x="778" y="1032" font-size="15" fill="#1E293B">Statistics &amp; coverage figures</text>
+<g transform="translate(1072 947) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M16 14v6"/><path d="M8 14v6"/><path d="M12 16v6"/></g>
+<text x="1096" y="960" font-size="15" fill="#1E293B">Daily forecast + map marker</text>
+<g transform="translate(1072 971) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7"/><path d="M17 12H7"/></g>
+<text x="1096" y="984" font-size="15" fill="#1E293B">Plain-language answer</text>
+<g transform="translate(1072 995) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></g>
+<text x="1096" y="1008" font-size="15" fill="#1E293B">Confidence &amp; evidence (Details)</text>
+<g transform="translate(1072 1019) scale(0.666667)" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></g>
+<text x="1096" y="1032" font-size="15" fill="#1E293B">HTML report + JSON trace</text>
+<rect x="1440" y="890" width="406" height="172" rx="16" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1.5"/>
+<circle cx="1472" cy="920" r="17" fill="#2563EB"/>
+<g transform="translate(1462 910) scale(0.833333)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></g>
+<text x="1498" y="926" font-size="17" font-weight="700" fill="#1E3A8A" letter-spacing="0.4">9 · FOLLOW-UP LOOP</text>
+<g transform="translate(1460 943) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></g>
+<text x="1484" y="956" font-size="15" fill="#1E293B">Inspect the results</text>
+<g transform="translate(1460 965) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></g>
+<text x="1484" y="978" font-size="15" fill="#1E293B">Open details &amp; execution trace</text>
+<g transform="translate(1460 987) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></g>
+<text x="1484" y="1000" font-size="15" fill="#1E293B">Ask a follow-up question</text>
+<g transform="translate(1460 1009) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></g>
+<text x="1484" y="1022" font-size="15" fill="#1E293B">Select another AOI</text>
+<g transform="translate(1460 1031) scale(0.666667)" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></g>
+<text x="1484" y="1044" font-size="15" fill="#1E293B">Run another analysis</text>
+<path d="M688 976 L725 976" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="734,976 724,982 724,970" fill="#64748B"/>
+<path d="M1394 976 L1431 976" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="1440,976 1430,982 1430,970" fill="#64748B"/>
+<path d="M1846 976 L1878 976 L1878 148 L1855 148" fill="none" stroke="#2563EB" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="1846,148 1856,142 1856,154" fill="#2563EB"/>
+<g transform="translate(1878 560) rotate(-90)">
+<rect x="-113.79" y="-12" width="227.58" height="24" rx="12" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.2"/>
+<text x="0" y="4.7" font-size="13" font-weight="600" fill="#2563EB" text-anchor="middle">follow-up · new AOI · rerun</text>
+</g>
+</svg>

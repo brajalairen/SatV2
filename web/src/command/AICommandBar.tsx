@@ -95,23 +95,15 @@ export function AICommandBar() {
         </div>
       )}
 
-      {canFetchForArea && !error && !pending && !result && (
-        <Surface className="pointer-events-auto flex max-w-[720px] items-start gap-2.5 px-3 py-2.5">
-          <SquareDashed className="mt-0.5 h-4 w-4 shrink-0 text-faint" strokeWidth={1.75} />
-          <p className="text-[12px] leading-relaxed text-muted">
-            Area selected. Ask a question and Sentinel-2 imagery (plus Sentinel-1 SAR, if you ask for optical and SAR
-            together) will be fetched for it from <span className="text-ink">Copernicus Data Space</span>, or add your
-            own GeoTIFF with{" "}
-            <strong className="font-medium text-ink">+</strong>.
-          </p>
-        </Surface>
-      )}
+      {/* No explanation box for a selected area: the idle map stays clean (docs/demo-ui-notes.md). Data
+          sources and retrieval details live in Help, Details and the result's provenance. */}
 
       {areaShapeUnsupported && !error && (
         <Surface className="pointer-events-auto flex max-w-[720px] items-start gap-2.5 px-3 py-2.5">
           <SquareDashed className="mt-0.5 h-4 w-4 shrink-0 text-faint" strokeWidth={1.75} />
           <p className="text-[12px] leading-relaxed text-muted">
-            Fetching imagery supports rectangles only. Draw a rectangle over this area,{" "}
+            Fetching imagery supports rectangles only (weather questions work with any shape). Draw a rectangle
+            over this area,{" "}
             <button
               type="button"
               onClick={() => openSection("help")}
@@ -175,12 +167,10 @@ export function AICommandBar() {
               }
             }}
             placeholder={
-              hasImages
-                ? aoi
-                  ? "Ask about the selected area..."
-                  : "Ask anything about these images..."
-                : canFetchForArea
-                  ? "Ask about this area, and imagery will be fetched for it..."
+              aoi
+                ? "Ask about this area..."
+                : hasImages
+                  ? "Ask anything about these images..."
                   : "Add an image or select an area to get started..."
             }
             aria-label="Ask a question about your imagery"
@@ -214,7 +204,7 @@ export function AICommandBar() {
         {ready && (
           <p className="mt-1.5 truncate text-center text-[11px] text-faint">
             {!hasImages
-              ? "Fetching Copernicus Sentinel imagery for the selected area"
+              ? "Selected area: Sentinel imagery for image questions, a forecast for weather questions"
               : `${aoi ? "Analysing the selected area of " : "Analysing "}${inputsLabel(images)}`}
           </p>
         )}

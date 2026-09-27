@@ -8,6 +8,7 @@ import { Download, X } from "lucide-react";
 import { stepInputs, useAppStore } from "../state/useAppStore";
 import { cx, IconButton, Surface } from "../ui/primitives";
 import { taskLabel } from "./ResultOverlay";
+import { formatPoint } from "./WeatherProvenance";
 import type { StepStatus } from "../state/types";
 
 const STATUS_TONE: Record<StepStatus, string> = {
@@ -102,6 +103,13 @@ export function DetailsDrawer() {
           </Block>
 
           <Block title="Inputs">
+            {result.weather && (
+              <p className="mb-1.5 text-[11px] leading-relaxed text-muted">
+                <span className="font-medium text-ink">{result.weather.area_source}</span> - ~
+                {result.weather.area_extent_km.map((km) => km.toFixed(1)).join(" × ")} km; forecast point{" "}
+                {formatPoint(result.weather.point_wgs84)} (marked on the map); no imagery used
+              </p>
+            )}
             <ul className="space-y-1.5">
               {trace.images.map((image) => (
                 <li key={image.index} className="text-[11px] leading-relaxed text-muted">

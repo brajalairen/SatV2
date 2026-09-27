@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 320" width="1600" height="320"
+     font-family="'Segoe UI', Inter, 'Helvetica Neue', Arial, sans-serif">
+  <title>SatQuery AI: End-to-End Flow</title>
+
+  <!-- Title -->
+  <text x="40" y="47" font-size="30" font-weight="700" fill="#0F172A">End-to-End Flow</text>
+
+  <!-- Connecting arrows: centred on the cards, drawn first so the cards sit cleanly on top. -->
+  <g fill="none" stroke="#94A3B8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M312 184 H343 M335 175 L344 184 L335 193"/>
+    <path d="M627 184 H658 M650 175 L659 184 L650 193"/>
+    <path d="M942 184 H973 M965 175 L974 184 L965 193"/>
+    <path d="M1257 184 H1288 M1280 175 L1289 184 L1280 193"/>
+  </g>
+
+  <!-- 1. USER QUERY: chat / message -->
+  <g>
+    <rect x="40" y="78" width="260" height="212" rx="22" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <circle cx="170" cy="146" r="46" fill="#2563EB" fill-opacity="0.12"/>
+    <circle cx="170" cy="146" r="37" fill="#2563EB"/>
+    <g transform="translate(149 125) scale(1.75)" fill="none" stroke="#FFFFFF" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      <path d="M13 8H7"/>
+      <path d="M17 12H7"/>
+    </g>
+    <text x="170" y="247" text-anchor="middle" font-size="21" font-weight="700" letter-spacing="0.6"
+          fill="#1E293B">USER QUERY</text>
+  </g>
+
+  <!-- 2. AOI / DATA SELECTION: map pin inside selection corners -->
+  <g>
+    <rect x="355" y="78" width="260" height="212" rx="22" fill="#EEF2FF" stroke="#C7D2FE" stroke-width="1.5"/>
+    <circle cx="485" cy="146" r="46" fill="#4F46E5" fill-opacity="0.12"/>
+    <circle cx="485" cy="146" r="37" fill="#4F46E5"/>
+    <g transform="translate(464 125) scale(1.75)" fill="none" stroke="#FFFFFF" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+      <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+      <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+      <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+      <path d="M12 17.5c-2.5-2.2-4-4.3-4-6.2a4 4 0 0 1 8 0c0 1.9-1.5 4-4 6.2z"/>
+      <circle cx="12" cy="11.3" r="1.3"/>
+    </g>
+    <text text-anchor="middle" font-size="21" font-weight="700" letter-spacing="0.6" fill="#1E293B">
+      <tspan x="485" y="235">AOI / DATA</tspan>
+      <tspan x="485" y="261">SELECTION</tspan>
+    </text>
+  </g>
+
+  <!-- 3. AI ORCHESTRATION: workflow with an AI spark -->
+  <g>
+    <rect x="670" y="78" width="260" height="212" rx="22" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <circle cx="800" cy="146" r="46" fill="#7C3AED" fill-opacity="0.12"/>
+    <circle cx="800" cy="146" r="37" fill="#7C3AED"/>
+    <g transform="translate(779 125) scale(1.75)" fill="none" stroke="#FFFFFF" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="8" height="8" rx="2"/>
+      <rect x="13" y="13" width="8" height="8" rx="2"/>
+      <path d="M7 11v4a2 2 0 0 0 2 2h4"/>
+      <path d="M17.5 2.5 L18.3 4.7 L20.5 5.5 L18.3 6.3 L17.5 8.5 L16.7 6.3 L14.5 5.5 L16.7 4.7 Z"
+            fill="#FFFFFF" stroke-width="1"/>
+    </g>
+    <text text-anchor="middle" font-size="21" font-weight="700" letter-spacing="0.6" fill="#1E293B">
+      <tspan x="800" y="235">AI</tspan>
+      <tspan x="800" y="261">ORCHESTRATION</tspan>
+    </text>
+  </g>
+
+  <!-- 4. REMOTE SENSING ANALYSIS: satellite -->
+  <g>
+    <rect x="985" y="78" width="260" height="212" rx="22" fill="#F0FDFA" stroke="#99F6E4" stroke-width="1.5"/>
+    <circle cx="1115" cy="146" r="46" fill="#0D9488" fill-opacity="0.12"/>
+    <circle cx="1115" cy="146" r="37" fill="#0D9488"/>
+    <g transform="translate(1094 125) scale(1.75)" fill="none" stroke="#FFFFFF" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 7 9 3 5 7l4 4"/>
+      <path d="m17 11 4 4-4 4-4-4"/>
+      <path d="m8 12 4 4 6-6-4-4Z"/>
+      <path d="m16 8 3-3"/>
+      <path d="M9 21a6 6 0 0 0-6-6"/>
+    </g>
+    <text text-anchor="middle" font-size="21" font-weight="700" letter-spacing="0.6" fill="#1E293B">
+      <tspan x="1115" y="235">REMOTE SENSING</tspan>
+      <tspan x="1115" y="261">ANALYSIS</tspan>
+    </text>
+  </g>
+
+  <!-- 5. VISUAL + TEXT RESULT: report with an image and text lines -->
+  <g>
+    <rect x="1300" y="78" width="260" height="212" rx="22" fill="#F0FDF4" stroke="#BBF7D0" stroke-width="1.5"/>
+    <circle cx="1430" cy="146" r="46" fill="#16A34A" fill-opacity="0.12"/>
+    <circle cx="1430" cy="146" r="37" fill="#16A34A"/>
+    <g transform="translate(1409 125) scale(1.75)" fill="none" stroke="#FFFFFF" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="2" width="16" height="20" rx="2"/>
+      <rect x="7" y="5" width="10" height="7" rx="1"/>
+      <path d="M7.5 11.5l3-3 2.5 2.5 1.5-1.5 2.5 2" stroke-width="1.5"/>
+      <path d="M7 15.5h10"/>
+      <path d="M7 18.5h6"/>
+    </g>
+    <text text-anchor="middle" font-size="21" font-weight="700" letter-spacing="0.6" fill="#1E293B">
+      <tspan x="1430" y="235">VISUAL + TEXT</tspan>
+      <tspan x="1430" y="261">RESULT</tspan>
+    </text>
+  </g>
+</svg>

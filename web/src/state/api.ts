@@ -7,6 +7,7 @@ import type {
   FetchImageryResult,
   Health,
   Modality,
+  RouteResult,
   TaskType,
   UploadInfo,
 } from "./types";
@@ -96,6 +97,39 @@ export const api = {
         aoi_bbox: aoiBbox,
         days_back: options.daysBack ?? null,
         max_cloud: options.maxCloud ?? null,
+      }),
+    }),
+
+  /** Which specialist a question is for, decided on the server from the wording alone. Asked first,
+   *  so a weather question never reaches imagery retrieval. */
+  route: (query: string, signal?: AbortSignal) =>
+    request<RouteResult>("/api/route", {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    }),
+
+  /** A short-range forecast for a point inside the area (optional capability). Any drawn shape works;
+   *  failing that, the footprint of the images in use. No imagery is retrieved. */
+  weather: (
+    query: string,
+    area: {
+      aoiGeometry?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
+      aoiBbox?: [number, number, number, number] | null;
+      areaSource: "drawn area" | "image footprint";
+    },
+    signal?: AbortSignal,
+  ) =>
+    request<AnalyzeResult>("/api/weather", {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        aoi_geometry: area.aoiGeometry ?? null,
+        aoi_bbox: area.aoiBbox ?? null,
+        area_source: area.areaSource,
       }),
     }),
 

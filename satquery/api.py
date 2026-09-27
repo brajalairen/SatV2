@@ -8,9 +8,10 @@ from uuid import uuid4
 
 from satquery.agent.aggregator import aggregate
 from satquery.agent.executor import execute
+from satquery.agent.forecast import classify_weather
 from satquery.agent.intents import (COMPATIBLE_TASKS, classify, find_target, needs_multiple_dates,
-                                    needs_optical_and_sar)
-from satquery.agent.planner import build_plan
+                                    needs_optical_and_sar, route_query)
+from satquery.agent.planner import build_plan, build_weather_plan
 from satquery.evidence import write_reports
 from satquery import geo
 from satquery.imaging import load_image
@@ -18,6 +19,7 @@ from satquery.schemas import AnalysisRequest, AnalysisResponse, ExecutionTrace, 
 from satquery.settings import Settings, load_settings
 from satquery.specialists.tools import MAX_PROMPT_CHARS, ToolContext
 from satquery.specialists.vlm import FakeVLM, VLMBackend
+from satquery.specialists.weather import OpenMeteoWeather, WeatherBackend
 from satquery.validation import check_images, check_request, detect_input_config, issue
 
 _VLM_CACHE: dict[tuple, VLMBackend] = {}
@@ -48,6 +50,23 @@ def preload(settings: Settings | None = None) -> VLMBackend:
     if hasattr(vlm, "load"):
         vlm.load()
     return vlm
+
+
+_WEATHER: dict[tuple, OpenMeteoWeather] = {}
+_WEATHER_LOCK = threading.Lock()
+POINT_FORECAST_SPAN_KM = 10.0  # wider than this, one point plainly cannot stand for the whole area
+
+
+def get_weather(settings: Settings) -> OpenMeteoWeather | None:
+    """The weather backend, kept for the process so its forecast cache is shared; None when switched off."""
+    if not settings.weather_enabled:
+        return None
+    key = (settings.weather_provider, settings.open_meteo_api_key, settings.weather_cache_ttl_s, settings.weather_timeout_s)
+    with _WEATHER_LOCK:
+        if key not in _WEATHER:
+            _WEATHER[key] = OpenMeteoWeather(api_key=settings.open_meteo_api_key, timeout=settings.weather_timeout_s,
+                                             cache_ttl_s=settings.weather_cache_ttl_s)
+        return _WEATHER[key]
 
 
 def _errors(issues: list[ValidationIssue]) -> list[ValidationIssue]:
@@ -147,3 +166,77 @@ def analyze(request: AnalysisRequest, settings: Settings | None = None, vlm: VLM
     trace.steps = execute(trace.plan, ctx)
     status, answer, evidence, confidence = aggregate(intent, ctx, trace.steps, run_dir)
     return finish(status, answer, intent.task, evidence, confidence)
+
+
+def answer_weather(query: str, area: dict | None, *, area_source: str = "drawn area", settings: Settings | None = None,
+                   backend: WeatherBackend | None = None) -> AnalysisResponse:
+    """A weather question about a drawn area (D-029: optional capability, not an SIH requirement).
+
+    The same intent -> plan -> execute -> aggregate path, trace and reports as `analyze`, with no
+    imagery: the area's representative point is forecast by the `weather.forecast` tool. Refusals
+    (no area, mixed or long-range questions) and provider failures are structured, and nothing is
+    ever estimated in place of a forecast.
+    """
+    settings = settings or load_settings()
+    started = time.perf_counter()
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:6]
+    run_dir = Path(settings.runs_dir) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    trace = ExecutionTrace(run_id=run_id, created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                           query=query, input_config=None, images=[], validation=[], intent=None, plan=[], steps=[])
+
+    def finish(status, answer, task=None, evidence=(), confidence=None) -> AnalysisResponse:
+        trace.total_duration_s = round(time.perf_counter() - started, 3)
+        response = AnalysisResponse(status=status, task=task, answer=answer, evidence=list(evidence),
+                                    confidence=confidence, trace=trace)
+        response.report_html, response.report_json = write_reports(response, run_dir)
+        return response
+
+    def reject(code: str, message: str) -> AnalysisResponse:
+        trace.validation.append(issue(code, message))
+        return finish("invalid_input", "Input rejected: " + message)
+
+    if not query.strip():
+        return reject("empty_query", "Please enter a question or instruction.")
+    if area is None:
+        return reject("area_missing", "Select an area on the map (any shape) to get a weather forecast for it.")
+    problem = geo.geometry_problem(area)
+    if problem:
+        return reject("area_invalid", f"The selected area cannot be used: {problem}.")
+    route, rule = route_query(query)
+    if route == "mixed":
+        return reject("mixed_question", f"This asks two things at once ({rule}): a weather forecast and a satellite "
+                      "analysis. Please ask them one at a time; combining the two in one answer is not supported yet.")
+    if route != "weather":
+        return reject("not_a_weather_question", "This is not a weather question, so the weather specialist does not "
+                      "answer it.")
+
+    trace.input_config = "area_only"
+    intent, horizon = classify_weather(query)
+    trace.intent = intent
+    if horizon.unsupported:
+        return reject("forecast_horizon_unsupported",
+                      f'"{horizon.phrase}" cannot be forecast: {horizon.unsupported}. SatQuery gives short-range '
+                      "forecasts only, from today up to 16 days ahead, and does not estimate long-range, seasonal or "
+                      "past weather.")
+
+    longitude, latitude = geo.representative_point(area)
+    width, height = geo.area_extent_km(area)
+    size = f"~{width:.0f} × {height:.0f} km" if min(width, height) >= 1 else f"~{width:.1f} × {height:.1f} km"
+    large = max(width, height) > POINT_FORECAST_SPAN_KM
+    if large:
+        trace.validation.append(issue("point_forecast", f"The {area_source} spans {size}; the forecast is for one "
+                                      f"point inside it ({latitude:.4f}, {longitude:.4f}), and conditions can differ "
+                                      "across the area.", "warning"))
+    trace.plan = build_weather_plan(horizon, (longitude, latitude), area_source)
+    ctx = ToolContext(images=[], vlm=None, weather=backend or get_weather(settings))
+    trace.steps = execute(trace.plan, ctx)
+    failed = next((step for step in trace.steps if step.status == "failed"), None)
+    if failed:  # the step keeps the typed error in the trace; the user gets its message
+        return finish("error", "No forecast could be retrieved: " + (failed.error or "").split(": ", 1)[-1]
+                      + " No forecast was estimated in its place.", task="weather_forecast")
+    status, answer, evidence, confidence = aggregate(intent, ctx, trace.steps, run_dir)
+    lines = answer.split("\n")
+    lines.insert(-1, f"The point stands for the whole {area_source} ({size})"
+                     + ("; one point cannot represent all of it, and conditions can differ across it." if large else "."))
+    return finish(status, "\n".join(lines), "weather_forecast", evidence, confidence)

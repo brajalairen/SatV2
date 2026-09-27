@@ -32,3 +32,30 @@ describe("uploading a raster", () => {
     expect(sent[0]!.get("acquired")).toBe("2024-05-01");
   });
 });
+
+describe("routing and weather requests", () => {
+  function captureJson() {
+    const sent: { path: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      sent.push({ path, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    return sent;
+  }
+
+  it("routes with the question alone", async () => {
+    const sent = captureJson();
+    await api.route("Will it rain?");
+    expect(sent[0]).toEqual({ path: "/api/route", body: { query: "Will it rain?" } });
+  });
+
+  it("sends the drawn shape and says where the area came from", async () => {
+    const sent = captureJson();
+    const polygon: GeoJSON.Polygon = { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] };
+    await api.weather("Will it rain?", { aoiGeometry: polygon, aoiBbox: [0, 0, 1, 1], areaSource: "drawn area" });
+    expect(sent[0]).toEqual({
+      path: "/api/weather",
+      body: { query: "Will it rain?", aoi_geometry: polygon, aoi_bbox: [0, 0, 1, 1], area_source: "drawn area" },
+    });
+  });
+});

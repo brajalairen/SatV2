@@ -1,15 +1,17 @@
 """Tool registry (R9c): every step the planner may schedule, each with its permitted parameters (R9d)."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Callable
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from satquery import raster_analysis as ra
 from satquery.imaging import RasterImage, render_rgb
 from satquery.schemas import Confidence, Evidence
 from satquery.specialists.vlm import VLMBackend, VLMResult
+from satquery.specialists.weather import FORECAST_DAYS as MAX_PERIOD_DAYS
+from satquery.specialists.weather import Forecast, NoForecastData, WeatherBackend, WeatherNotConfigured
 
 SAR_VLM_NOTE = "The VLM was trained on optical imagery; this SAR image was rendered as false colour, so reliability is low."
 
@@ -17,10 +19,11 @@ SAR_VLM_NOTE = "The VLM was trained on optical imagery; this SAR image was rende
 @dataclass
 class ToolContext:
     images: list[RasterImage]
-    vlm: VLMBackend
+    vlm: VLMBackend | None
     artifacts: dict[str, "ToolOutput"] = field(default_factory=dict)
     _renders: dict[int, np.ndarray] = field(default_factory=dict)
     _valid: dict[int, np.ndarray] = field(default_factory=dict)
+    weather: WeatherBackend | None = None  # the weather specialist's provider (D-029), injected like the VLM
 
     def rgb(self, index: int) -> np.ndarray:
         if index not in self._renders:
@@ -109,6 +112,25 @@ class FusionParams(Params):
     sar_bright_step: str | None = None
     optical_building_step: str | None = None
     optical_building_key: str | None = Field(None, pattern=r"^[a-z_]+$")
+
+
+class WeatherParams(Params):
+    """A point and a period. The period stays abstract (a weekday, the weekend, a date) until the
+    forecast arrives, because only then is the location's own calendar known."""
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    start_day: int = Field(0, ge=0, le=MAX_PERIOD_DAYS - 1)  # days after the location's local today
+    days: int = Field(7, ge=1, le=MAX_PERIOD_DAYS)
+    weekday: int | None = Field(None, ge=0, le=6)  # the next such day, 0 = Monday
+    weekend: bool = False
+    on_date: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    current: bool = False  # also report current conditions
+
+    @model_validator(mode="after")
+    def _within_horizon(self) -> "WeatherParams":
+        if self.start_day + self.days > MAX_PERIOD_DAYS:
+            raise ValueError(f"the period ends beyond the {MAX_PERIOD_DAYS}-day forecast")
+        return self
 
 
 @dataclass(frozen=True)
@@ -321,6 +343,51 @@ def cross_modal(ctx, idx, p: FusionParams, step_id):
     return ToolOutput(outputs=outputs, evidence=evidence, confidence=confidence, masks=masks)
 
 
+def _period(forecast: Forecast, p: WeatherParams) -> list:
+    """The forecast days the question asked about, resolved on the location's own calendar."""
+    from datetime import date, timedelta
+
+    local_today = date.fromisoformat(forecast.days[0].date)
+    start, count = p.start_day, p.days
+    if p.on_date:
+        start, count = (date.fromisoformat(p.on_date) - local_today).days, 1
+    elif p.weekday is not None:
+        start, count = (p.weekday - local_today.weekday()) % 7, 1
+    elif p.weekend:
+        start = (5 - local_today.weekday()) % 7  # the coming Saturday, or today when it is Saturday
+        start, count = (0, 1) if local_today.weekday() == 6 else (start, 2)  # Sunday: only today is left
+    wanted = {(local_today + timedelta(days=start + i)).isoformat() for i in range(count)}
+    return [day for day in forecast.days if day.date in wanted]
+
+
+def weather_forecast(ctx, idx, p: WeatherParams, step_id):
+    """Short-range forecast for one point: the days asked about, and current conditions if asked."""
+    if ctx.weather is None:
+        raise WeatherNotConfigured("Weather forecasts are switched off on this server (SATQUERY_WEATHER=off).")
+    forecast = ctx.weather.forecast(p.latitude, p.longitude)
+    days = _period(forecast, p)
+    if not days:
+        raise NoForecastData(f"The forecast (from {forecast.days[0].date}, {len(forecast.days)} days) does not "
+                             "cover the period asked about.")
+    info = forecast.as_dict()
+    outputs = {key: info[key] for key in ("provider", "model", "latitude", "longitude", "elevation_m", "timezone",
+                                          "timezone_abbreviation", "units", "retrieved_at", "cached", "attribution",
+                                          "attribution_url")}
+    outputs |= {"local_today": forecast.days[0].date, "period": [days[0].date, days[-1].date],
+                "days": [asdict(day) for day in days],
+                "current": asdict(forecast.current) if p.current and forecast.current else None}
+    evidence = [Evidence(kind="metric", label=f"{day.date} {label}", value=value, source_step=step_id)
+                for day in days for label, value in (("precipitation probability max (%)", day.precipitation_probability_max),
+                                                     ("precipitation sum (mm)", day.precipitation_sum),
+                                                     ("temperature max (degC)", day.temperature_max),
+                                                     ("temperature min (degC)", day.temperature_min))]
+    confidence = Confidence(value=None, method="not estimated by SatQuery: rain chances are the provider's forecast "
+                            "probabilities (wording: likely >= 70%, possible 30-69%, unlikely < 30%)",
+                            note="A model forecast for one point, not calibrated for this area.")
+    return ToolOutput(outputs=outputs, evidence=evidence, confidence=confidence,
+                      model=f"{forecast.provider} forecast API, {forecast.model.split(' ')[0]}")
+
+
 REGISTRY: dict[str, Tool] = {tool.name: tool for tool in [
     Tool("vlm.caption", "Scene description by the remote-sensing VLM", CaptionParams, vlm_caption),
     Tool("vlm.vqa", "Visual question answering by the remote-sensing VLM", QuestionParams, vlm_vqa),
@@ -335,4 +402,6 @@ REGISTRY: dict[str, Tool] = {tool.name: tool for tool in [
     Tool("change.map", "Deterministic change map (change vector / log-ratio + Otsu)", ChangeMapParams, change_map),
     Tool("change.compare_areas", "Compare a class's area between two dates", CompareParams, compare_areas),
     Tool("fusion.cross_modal", "Combine optical and SAR masks with an agreement score", FusionParams, cross_modal),
+    Tool("weather.forecast", "Short-range weather forecast for one point (Open-Meteo; optional capability)",
+         WeatherParams, weather_forecast),
 ]}

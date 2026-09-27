@@ -51,6 +51,9 @@ export function MapView({ children }: { children?: ReactNode }) {
   // equality would treat as a change on every render.
   const overlays = useAppStore(useShallow(visibleOverlays));
   const aoi = useAppStore((s) => s.aoi);
+  // The one point a weather answer was forecast for: shown so a point forecast is never mistaken
+  // for a forecast of the whole drawn area.
+  const weatherPoint = useAppStore((s) => s.result?.weather?.point_wgs84 ?? null);
 
   // --- create the map once
   useEffect(() => {
@@ -120,6 +123,13 @@ export function MapView({ children }: { children?: ReactNode }) {
     syncAoi(map, aoi?.feature ?? null);
     raiseDrawingLayers(map);
   }, [map, styleReady, aoi, layers, overlays]);
+
+  // --- the weather forecast point, above the area it stands for
+  useEffect(() => {
+    if (!map || !styleReady) return;
+    syncWeatherPoint(map, weatherPoint);
+    raiseDrawingLayers(map);
+  }, [map, styleReady, weatherPoint, aoi, layers, overlays]);
 
   return (
     <MapContext.Provider value={{ map, styleReady }}>
@@ -212,6 +222,35 @@ function syncAoi(map: MapLibreMap, feature: GeoJSON.Feature | null) {
       "circle-stroke-width": 2,
       "circle-stroke-color": "#ffffff",
     },
+  });
+}
+
+const WEATHER_SOURCE = "weather-point";
+const WEATHER_LAYERS = ["weather-point-halo", "weather-point-dot"];
+
+function syncWeatherPoint(map: MapLibreMap, point: [number, number] | null) {
+  const data: GeoJSON.FeatureCollection = {
+    type: "FeatureCollection",
+    features: point ? [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: point } }] : [],
+  };
+  const source = map.getSource(WEATHER_SOURCE);
+  if (source && "setData" in source) {
+    (source as GeoJSONSource).setData(data);
+    WEATHER_LAYERS.forEach((id) => map.getLayer(id) && map.moveLayer(id));
+    return;
+  }
+  map.addSource(WEATHER_SOURCE, { type: "geojson", data });
+  map.addLayer({
+    id: "weather-point-halo",
+    type: "circle",
+    source: WEATHER_SOURCE,
+    paint: { "circle-radius": 14, "circle-color": "#f59e0b", "circle-opacity": 0.25 },
+  });
+  map.addLayer({
+    id: "weather-point-dot",
+    type: "circle",
+    source: WEATHER_SOURCE,
+    paint: { "circle-radius": 6, "circle-color": "#f59e0b", "circle-stroke-width": 2, "circle-stroke-color": "#ffffff" },
   });
 }
 

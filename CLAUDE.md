@@ -64,9 +64,11 @@ If sources disagree, report the discrepancy instead of silently picking one.
 | Drawn areas (`web/src/map/AoiLayer.tsx` -> `aoi_geometry`) | 2026-09-20: rectangle and circle are press-drag-release, anchored at the press point, with the shape visible while dragging. The real geometry reaches the server; circles and polygons are masked to the shape (pixels outside become NaN nodata) and coverage figures count valid pixels only. Rectangles keep the original box crop (outputs verified identical). |
 | Gradio UI (`satquery/ui.py`, `app.py`) | Still working; kept as a fallback and for the HF Spaces path. |
 | VQA, caption, grounding, change analysis, optical–SAR fusion, single-SAR-image path | Implemented. **All 8 demo scenarios validated with real Falcon on GPU (2026-09-17)**, all status ok, no failed steps: VQA, caption, grounding, bi-temporal change, change VQA, optical–SAR fusion (water agreement IoU 0.97), single-SAR water, and grid-mismatch rejection. |
+| Water: optical first, radar fallback (D-030, 2026-09-27) | Water/vegetation grounding on multispectral input answers from NDWI/NDVI (VLM secondary). For a water question on a retrieved Sentinel-2 scene, Sentinel-2's scene classification measures cloud, shadow and no data **inside the selected area** (never the tile's cloud cover); at >= 20% affected or < 256 clear pixels (configurable heuristics) the nearest Sentinel-1 scene answers instead. Explicit radar questions fetch Sentinel-1 directly. Verified live at Loktak Lake (tile 16.61%, area 42.0% -> Sentinel-1D). |
+| Weather forecasts (D-029, 2026-09-27) **[R1-OPT], not an SIH requirement** | A weather question over a selected area (any shape) is routed by `/api/route` before any imagery retrieval and answered by the `weather.forecast` tool (Open-Meteo, no key, CC BY 4.0): one point inside the area, marked on the map, today to 16 days. Long-range, seasonal, past and mixed weather+imagery questions are refused. No fake fallback. |
 | Optical + SAR joint analysis (D-028, 2026-09-27) | End to end in the browser on both real BigEarthNet S2+S1 demo pairs (uploaded, modality read from band descriptions) and on live Copernicus S2 + S1 pairs for a drawn rectangle. Joint questions without both modalities are refused (`missing_sar`/`missing_optical`), never re-routed. Answer separates optical / SAR / fused evidence; one fused map layer per class. Choices marked PROPOSED in D-028. |
 | Deterministic tools: SAR water/bright masks, NDVI/NDWI, change map, fusion agreement | Implemented; heuristic and labelled as such. The optical change map scales both dates by **one shared percentile range** (D-026, 2026-09-20), so older bi-temporal figures do not apply. |
-| Tests | Python **325 passing** (`pytest`, synthetic data, no GPU; 3 opt-in `live` Copernicus tests deselected); web **67 passing** (`cd web; npm test`), as of 2026-09-27. Whole-app browser checks were run outside the repo in the 2026-09-20 session: see `docs/handoff-2026-09-20.md` §2. |
+| Tests | Python **493 passing** (`pytest`, synthetic data, no GPU, no network; 6 opt-in `live` tests deselected: 5 Copernicus, 1 Open-Meteo); web **83 passing** (`cd web; npm test`), as of 2026-09-27. Whole-app browser checks were run outside the repo in the 2026-09-20 session: see `docs/handoff-2026-09-20.md` §2. |
 | BigEarthNet S1 classifier (`specialists/s1_classifier.py`) | Ported, **not registered** as a tool ([R1-OPT], D-015) |
 | Round 1 web-app link | **Map-first app from the GPU laptop through a tunnel** (`uvicorn satquery.server:app` + `cloudflared tunnel --url http://localhost:8000`), per D-024. The Gradio share link (`SATQUERY_SHARE=1 python app.py`, verified 2026-09-17) stays only as a fallback. Either way the laptop must stay online. Checklist: `docs/round1-submission-kit.md` §3. |
 | HF ZeroGPU deployment (`app.py`, `requirements.txt`, `scripts/deploy_space.py`) | Written but **cannot deploy on a free account**: HF returns HTTP 402 for both `cpu-basic` Gradio and ZeroGPU, as hosting either now requires PRO. Code stays ZeroGPU-compatible for later. |
@@ -85,6 +87,8 @@ If sources disagree, report the discrepancy instead of silently picking one.
   - D-025: the point tool is removed from area selection (2026-09-20); a point encloses no area
   - D-026: the bi-temporal change map compares both dates on one shared scale (2026-09-20); **older bi-temporal figures are void**
   - D-028: optical + SAR joint analysis and Sentinel-1 pairing (2026-09-27); its listed choices are **PROPOSED**, awaiting the team
+  - D-029: weather forecasts as an optional specialist (2026-09-27); **not SIH scope**, an exception to D-012's live-retrieval cut
+  - D-030: water is optical first (NDWI), judged by the selected area's own cloud from Sentinel-2's scene classification, with a Sentinel-1 fallback at >= 20% affected; explicit radar questions fetch Sentinel-1 (2026-09-27). The SAR threshold (D-009) is unchanged
 - **Before changing behaviour covered by a decision,** read its entry. **Do not decide open items silently;** raise them.
 - **Still excluded (D-012, as amended by D-023):** database, authentication, live imagery retrieval, Docker, co-registration algorithms, LLM planner, multi-agent.
   A map and React are now in scope (D-023); `satquery/server.py` is a thin HTTP layer over `analyze()`, not a separate service tier.
@@ -173,8 +177,8 @@ Commands:
 | `satquery/examples.py` | demo scenarios + example queries, shared by every front end | gradio, fastapi, agent |
 | `satquery/validation.py` | request, image and pair checks | agent, specialists |
 | `satquery/raster_analysis.py` | deterministic raster math | agent, specialists, torch |
-| `satquery/specialists/` | tool registry (`tools.py`), VLM interface + fake (`vlm.py`), Falcon (`falcon.py`) | agent, ui |
-| `satquery/agent/` | intents → plan → execute → aggregate | torch, model libraries |
+| `satquery/specialists/` | tool registry (`tools.py`), VLM interface + fake (`vlm.py`), Falcon (`falcon.py`), weather backend (`weather.py`, D-029) | agent, ui |
+| `satquery/agent/` | intents → plan → execute → aggregate; weather period and focus in `forecast.py` | torch, model libraries |
 | `satquery/api.py` | `analyze()`, the only entry point for UI, CLI and tests | ui |
 | `satquery/ui.py`, `cli.py`, `server.py`, `app.py` | presentation | specialists directly |
 | `web/` | React + MapLibre client; talks to `/api/*` only | anything Python |

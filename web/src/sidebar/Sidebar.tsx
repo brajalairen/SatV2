@@ -33,7 +33,9 @@ export function Sidebar() {
   const layerCount = useAppStore((s) => s.layers.length);
 
   return (
-    <div className="pointer-events-none absolute top-4 bottom-4 left-4 z-30 flex items-start gap-3">
+    // Starts 64 px down (56 px on small screens) to leave room for the SatQuery AI logo above it
+    // (ui/BrandMark.tsx), which is sized and placed to fit that space.
+    <div className="pointer-events-none absolute top-16 bottom-4 left-4 z-30 flex items-start gap-3 max-sm:top-14">
       {/* Collapsed rail: always present, the entry point to everything else. */}
       <Surface className="pointer-events-auto flex flex-col gap-1 p-1.5">
         {ITEMS.map((item) => (

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -24,8 +25,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from satquery import geo
-from satquery.agent.intents import find_target, needs_multiple_dates, needs_optical_and_sar
-from satquery.api import analyze
+from satquery.agent.intents import (find_target, needs_multiple_dates, needs_optical_and_sar, needs_sar_only,
+                                    route_query)
+from satquery.api import analyze, answer_weather
 from satquery.evidence import save_png
 from satquery.examples import EXAMPLE_QUERIES, EXAMPLES_DIR, load_scenarios
 from satquery.imaging import SUPPORTED_SUFFIXES, detect_modality, load_image, render_rgb
@@ -149,6 +151,25 @@ class AreaScope(BaseModel):
     masked: bool = False  # pixels outside a drawn circle or polygon were excluded, not just cropped
 
 
+class WeatherInfo(BaseModel):
+    """Where and when a forecast came from, for the result card and the map marker (D-029)."""
+
+    provider: str
+    model: str | None = None
+    attribution: str
+    attribution_url: str
+    area_source: str  # "drawn area" or "image footprint"
+    area_bbox_wgs84: tuple[float, float, float, float]
+    area_extent_km: tuple[float, float]  # east-west, north-south
+    point_wgs84: tuple[float, float]  # (longitude, latitude) forecast for: the marker on the map
+    grid_point_wgs84: tuple[float, float] | None = None  # the model grid point the provider answered for
+    elevation_m: float | None = None
+    timezone: str | None = None
+    period: tuple[str, str] | None = None  # local dates
+    retrieved_at: str | None = None
+    cached: bool = False
+
+
 class AnalyzeResult(BaseModel):
     """`AnalysisResponse` with artifact paths rewritten as URLs, plus per-overlay map placement."""
 
@@ -157,6 +178,28 @@ class AnalyzeResult(BaseModel):
     area: AreaScope | None = None  # present only when the request carried a drawn area
     # The uploads this result ran on, in input order: how the client knows which layers it describes.
     upload_ids: list[str] = Field(default_factory=list)
+    weather: WeatherInfo | None = None  # present only for a weather answer
+
+
+class RouteRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+
+
+class RouteResult(BaseModel):
+    """Which specialist a question is for. Wording only: nothing is retrieved or planned here."""
+
+    route: Literal["weather", "imagery", "mixed"]
+    rule: str
+    message: str | None = None  # for "mixed": what to do instead
+
+
+class WeatherRequest(BaseModel):
+    """A weather question about an area. Any drawn shape works: only a point inside it is forecast."""
+
+    query: str = Field(min_length=1, max_length=2000)
+    aoi_geometry: AreaGeometry | None = None
+    aoi_bbox: tuple[float, float, float, float] | None = None  # west, south, east, north
+    area_source: Literal["drawn area", "image footprint"] = "drawn area"
 
 
 class FetchImageryRequest(BaseModel):
@@ -206,22 +249,42 @@ class CrossModalInfo(BaseModel):
     explanation: str
 
 
+class OpticalQualityInfo(BaseModel):
+    """How much of the selected area an optical scene shows, by Sentinel-2's own scene classification,
+    and whether it was usable for a water question (D-030). Never the catalogue's tile cloud cover."""
+
+    scene: dict  # SceneMetadata of the optical scene that was assessed
+    pixels: int
+    clear_pixels: int
+    affected_fraction: float  # cloud, cloud shadow or no data, over the selected area
+    class_fractions: dict[str, float]
+    max_affected_fraction: float  # the configured limit (SATQUERY_OPTICAL_MAX_AFFECTED, a heuristic)
+    min_clear_pixels: int
+    usable: bool
+    reason: str | None = None  # why the optical scene was not used
+    method: str
+    masked: bool = False  # the affected pixels were left out of the optical analysis
+
+
 class FetchImageryResult(BaseModel):
     """Retrieved imagery, registered as ordinary uploads the existing pipeline can analyse.
 
-    `mode` is "single" for one scene, "temporal" for a question about change over time, and
-    "cross_modal" for a question asking for optical and SAR together. `images` lists every scene
-    retrieved: oldest first, or optical then SAR. `upload` and `metadata` are the most recent scene
-    (the optical one for a sensor pair), as they were before multi-scene retrieval existed, so a
-    single-date client reads them unchanged.
+    `mode` is "single" for one scene, "temporal" for a question about change over time,
+    "cross_modal" for a question asking for optical and SAR together, "sar" for a question asking for
+    radar alone, and "sar_fallback" when a water question's optical scene was too obscured to use and
+    the nearest Sentinel-1 scene answers instead. `images` lists every scene to analyse: oldest first,
+    or optical then SAR. `upload` and `metadata` are the most recent scene (the optical one for a
+    sensor pair), as they were before multi-scene retrieval existed, so a single-date client reads
+    them unchanged. `optical_quality` is present whenever a water question's optical scene was assessed.
     """
 
-    mode: Literal["single", "temporal", "cross_modal"] = "single"
+    mode: Literal["single", "temporal", "cross_modal", "sar", "sar_fallback"] = "single"
     upload: UploadInfo
     metadata: dict  # SceneMetadata: provider, satellite, date, cloud cover, bands, CRS, ...
     images: list[FetchedScene] = Field(default_factory=list)
     temporal: TemporalInfo | None = None
     cross_modal: CrossModalInfo | None = None
+    optical_quality: OpticalQualityInfo | None = None
     cached: bool = False
 
 
@@ -241,6 +304,9 @@ class Health(BaseModel):
     # exposed by this endpoint, and the frontend needs nothing more than "is the feature available".
     imagery_provider: str | None = None
     imagery_available: bool = False
+    # The same for weather forecasts (optional capability): a name and a boolean, never a credential.
+    weather_provider: str | None = None
+    weather_available: bool = False
 
 
 # --------------------------------------------------------------------------- helpers
@@ -302,7 +368,8 @@ def _register(store: UploadStore, source: Path, name: str, modality: Modality,
     upload = store.add(Upload(id=uuid.uuid4().hex[:12], path=source, name=name, modality=modality,
                               acquired=acquired, summary=geo.summarize(image, 0)))
     preview = store.directory / f"{upload.id}-preview.png"
-    save_png(render_rgb(image), preview)
+    # Transparent where the raster has no data (e.g. masked cloud), not black; unchanged when all is valid.
+    save_png(render_rgb(image), preview, np.isfinite(image.data).any(axis=0))
     upload.preview = preview
     return UploadInfo(id=upload.id, name=name, modality=modality, acquired=acquired,
                       summary=upload.summary, preview_url=f"/api/uploads/{upload.id}/preview.png",
@@ -400,6 +467,26 @@ def _apply_area(uploads: list[Upload], bbox: tuple[float, float, float, float] |
                             masked=any(crop.masked for crop in crops))
 
 
+def _weather_info(response: AnalysisResponse, area: dict | None, area_source: str) -> WeatherInfo | None:
+    """Provenance of a weather answer: the area and its forecast point, and what the provider returned."""
+    if area is None or geo.geometry_problem(area):
+        return None
+    from satquery.specialists.weather import ATTRIBUTION, ATTRIBUTION_URL, PROVIDER
+
+    longitude, latitude = geo.representative_point(area)
+    info = WeatherInfo(provider=PROVIDER, attribution=ATTRIBUTION, attribution_url=ATTRIBUTION_URL,
+                       area_source=area_source, area_bbox_wgs84=geo.geometry_bounds(area),
+                       area_extent_km=tuple(round(v, 2) for v in geo.area_extent_km(area)),
+                       point_wgs84=(round(longitude, 6), round(latitude, 6)))
+    step = next((s for s in response.trace.steps if s.tool == "weather.forecast" and s.status == "ok"), None)
+    if step:
+        o = step.outputs
+        info.model, info.elevation_m, info.timezone = o["model"], o["elevation_m"], o["timezone"]
+        info.grid_point_wgs84 = (o["longitude"], o["latitude"])
+        info.period, info.retrieved_at, info.cached = tuple(o["period"]), o["retrieved_at"], o["cached"]
+    return info
+
+
 def _examples() -> list[Example]:
     """Demo scenarios from demo/examples/examples.json (format in demo/examples/README.md)."""
     return [Example(index=i, label=e["label"], query=e["query"], images=e["images"])
@@ -433,7 +520,44 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
                       model_is_fake=current.vlm_backend == "fake",
                       imagery_provider="Copernicus Data Space Ecosystem"
                       if current.copernicus_configured else None,
-                      imagery_available=current.copernicus_configured)
+                      imagery_available=current.copernicus_configured,
+                      weather_provider="Open-Meteo" if current.weather_enabled else None,
+                      weather_available=current.weather_enabled)
+
+    @app.post("/api/route", response_model=RouteResult)
+    def route(request: RouteRequest) -> RouteResult:
+        """Weather, imagery, or an unsupported mix of both: decided from the wording alone, so the client
+        can send a weather question to the weather specialist before any imagery is retrieved."""
+        decided, rule = route_query(request.query)
+        message = ("This asks for a weather forecast and a satellite analysis at once, which is not supported yet. "
+                   "Please ask the weather question and the imagery question separately.") if decided == "mixed" else None
+        return RouteResult(route=decided, rule=rule, message=message)
+
+    @app.post("/api/weather", response_model=AnalyzeResult)
+    def weather(request: WeatherRequest) -> AnalyzeResult:
+        """A short-range forecast for a point inside the selected area (optional capability, D-029).
+
+        Never retrieves imagery. A switched-off provider is a 503; everything else (no area, a
+        long-range or mixed question, a provider failure) is a result the card can explain.
+        """
+        current = load_settings()
+        if not current.weather_enabled:
+            return JSONResponse(status_code=503, content={
+                "code": "weather_not_configured",
+                "message": "Weather forecasts are switched off on this server (SATQUERY_WEATHER=off)."})
+        if request.aoi_geometry is not None:
+            area = request.aoi_geometry.model_dump()
+        elif request.aoi_bbox is not None:
+            area = geo.bbox_geometry(request.aoi_bbox)
+            problem = geo.geometry_problem(area)
+            west, south, east, north = request.aoi_bbox
+            if problem or west >= east or south >= north:
+                return JSONResponse(status_code=422, content={
+                    "code": "area_invalid", "message": f"The selected area cannot be used: {problem or 'it has no extent'}."})
+        else:
+            area = None
+        response = _to_urls(answer_weather(request.query, area, area_source=request.area_source, settings=current))
+        return AnalyzeResult(response=response, overlay_layers=[], weather=_weather_info(response, area, request.area_source))
 
     @app.get("/api/examples", response_model=list[Example])
     def examples() -> list[Example]:
@@ -490,7 +614,19 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
         dated uploads are exactly what its existing bi-temporal change analysis takes.
         """
         from satquery.providers.copernicus import CopernicusSentinelProvider, bands_for_target
-        from satquery.providers.errors import RetrievalError
+        from satquery.providers.errors import RetrievalError, SarTemporalUnsupported
+
+        # A weather question never retrieves imagery, not even from a client that skipped /api/route.
+        # Checked first, before any provider (or credential) is touched.
+        decided, rule = route_query(request.query)
+        if decided != "imagery":
+            return JSONResponse(status_code=422, content={
+                "code": f"{decided}_question",
+                "message": "This is a weather question, answered by the weather specialist; no satellite imagery is "
+                           "retrieved for it." if decided == "weather" else
+                           "This asks for a weather forecast and a satellite analysis at once, which is not supported "
+                           "yet. Please ask the two questions separately.",
+                "detail": rule})
 
         current = load_settings()
         try:
@@ -506,6 +642,14 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
             # wording ("compare optical and SAR ...") must not be mistaken for a comparison of dates.
             if needs_optical_and_sar(request.query):
                 return fetch_optical_sar(provider, request, bands, current)
+            # A question asking for radar alone gets Sentinel-1 alone: no optical scene is involved.
+            if needs_sar_only(request.query):
+                if needs_multiple_dates(request.query):
+                    raise SarTemporalUnsupported(
+                        "Comparing two dates with radar is not supported yet, and answering with optical imagery "
+                        "instead would ignore what you asked. Ask without radar for an optical comparison, or ask "
+                        "about a single date with radar.")
+                return fetch_sar(provider, request, current)
             # One scene can never answer a question about change over time, so such a question gets
             # two real acquisitions of the same area. Never one scene used twice (CLAUDE.md section 7).
             if needs_multiple_dates(request.query):
@@ -523,6 +667,10 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
                                           days_back=request.days_back, max_cloud=request.max_cloud)
                 metadata = scene.metadata.as_dict()
                 metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            # A water question checks what the optical scene really shows over the selected area, and
+            # falls back to radar when too little of it is visible. Other questions are unchanged.
+            if target == "water":
+                return fetch_water_scene(provider, cache_folder, metadata, current)
         except RetrievalError as problem:
             # Never fall back to fake imagery: the reason is reported instead.
             return JSONResponse(status_code=problem.status, content=problem.as_payload())
@@ -532,6 +680,81 @@ def create_app(run_analysis: Callable[[AnalysisRequest], AnalysisResponse] = ana
         return FetchImageryResult(mode="single", upload=upload, metadata=metadata,
                                   images=[FetchedScene(role="single", upload=upload, metadata=metadata)],
                                   cached=bool(metadata.get("cached")))
+
+    def fetch_water_scene(provider, folder: Path, metadata: dict, current: Settings) -> FetchImageryResult:
+        """A water question on one optical scene (D-030).
+
+        Sentinel-2 first. Its scene classification, on the same grid, says how much of the SELECTED
+        AREA is cloud, cloud shadow or no data. Usable: the clear pixels are analysed with NDWI (the
+        affected ones become nodata). Not usable: the nearest Sentinel-1 scene is retrieved, only
+        then, and the water map comes from radar. Every file is cached beside the optical scene.
+        """
+        from datetime import date
+
+        from satquery.providers import quality
+        from satquery.providers.copernicus import check_same_grid
+        from satquery.providers.errors import NoSarImagery
+
+        bbox, acquired = metadata["bbox_wgs84"], metadata["acquired"]
+        scene_path, scl_path = folder / "scene.tif", folder / "scl.tif"
+        cached = bool(metadata.get("cached")) and scl_path.is_file()
+        if not scl_path.is_file():
+            partial = folder / "scl.partial.tif"  # renamed only once it is known to match the scene
+            provider.retrieve_scene_classification(bbox, acquired, partial)
+            check_same_grid(scene_path, partial, compare_band_count=False)
+            partial.replace(scl_path)
+        assessed = quality.assess(scl_path, max_affected_fraction=current.optical_max_affected_fraction,
+                                  min_clear_pixels=current.optical_min_clear_pixels)
+        info = OpticalQualityInfo(scene=metadata, **assessed.as_dict())
+
+        if assessed.usable:
+            analysed = scene_path
+            if assessed.affected_fraction > 0:
+                analysed = folder / "scene-clear.tif"
+                if not analysed.is_file():
+                    partial = folder / "scene-clear.partial.tif"
+                    quality.mask_affected(scene_path, scl_path, partial).replace(analysed)
+                info.masked = True
+            name = f"Sentinel-2 L2A {acquired}" + (" (cloud-masked)" if info.masked else "")
+            upload = _register(store, analysed, name, "optical", acquired, current)
+            return FetchImageryResult(mode="single", upload=upload, metadata=metadata,
+                                      images=[FetchedScene(role="single", upload=upload, metadata=metadata)],
+                                      optical_quality=info, cached=cached)
+
+        # The optical scene cannot answer: the nearest radar scene is retrieved now, and only now.
+        sar_path, sar_record = folder / "sar-fallback.tif", folder / "sar-fallback.json"
+        if sar_path.is_file() and sar_record.is_file():
+            sar_meta = json.loads(sar_record.read_text(encoding="utf-8")) | {"cached": True}
+        else:
+            cached = False
+            try:
+                sar = provider.retrieve_sar_near(bbox, date.fromisoformat(acquired), sar_path)
+            except NoSarImagery as problem:
+                raise NoSarImagery(f"The optical scene of {acquired} cannot be used here: {assessed.reason}. "
+                                   f"{problem.message}") from problem
+            check_same_grid(scene_path, sar.path, compare_band_count=False)
+            sar_meta = sar.metadata.as_dict()
+            sar_record.write_text(json.dumps(sar_meta, indent=2), encoding="utf-8")
+        upload = _register(store, sar_path, f"{sar_meta['satellite']} GRD {sar_meta['acquired']} (radar fallback)",
+                           "sar", sar_meta["acquired"], current)
+        return FetchImageryResult(mode="sar_fallback", upload=upload, metadata=sar_meta,
+                                  images=[FetchedScene(role="sar", upload=upload, metadata=sar_meta)],
+                                  optical_quality=info, cached=cached and bool(sar_meta.get("cached")))
+
+    def fetch_sar(provider, request: FetchImageryRequest, current: Settings) -> FetchImageryResult:
+        """The most recent Sentinel-1 scene for a question asking for radar alone (D-030)."""
+        folder = current.runs_dir / "imagery-cache" / provider.sar_cache_key(request.aoi_bbox, days_back=request.days_back)
+        path, record = folder / "sar.tif", folder / "sar.json"
+        cached = path.is_file() and record.is_file()
+        if cached:
+            meta = json.loads(record.read_text(encoding="utf-8"))
+        else:
+            meta = provider.retrieve_sar(request.aoi_bbox, path, days_back=request.days_back).metadata.as_dict()
+            record.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        meta |= {"cached": cached}
+        upload = _register(store, path, f"{meta['satellite']} GRD {meta['acquired']} (SAR)", "sar", meta["acquired"], current)
+        return FetchImageryResult(mode="sar", upload=upload, metadata=meta,
+                                  images=[FetchedScene(role="sar", upload=upload, metadata=meta)], cached=cached)
 
     def fetch_pair(provider, request: FetchImageryRequest, bands: list[str], current: Settings) -> FetchImageryResult:
         """Two real acquisitions for a temporal question, registered oldest first.

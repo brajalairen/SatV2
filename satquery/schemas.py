@@ -9,8 +9,9 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Modality = Literal["optical", "sar"]
-InputConfig = Literal["single_optical", "single_sar", "pair_cross_modal", "pair_bitemporal"]
-TaskType = Literal["vqa", "caption", "grounding", "change_analysis", "cross_modal_analysis"]
+# "area_only": a drawn area and no imagery, as for a weather question (D-029, optional capability).
+InputConfig = Literal["single_optical", "single_sar", "pair_cross_modal", "pair_bitemporal", "area_only"]
+TaskType = Literal["vqa", "caption", "grounding", "change_analysis", "cross_modal_analysis", "weather_forecast"]
 Severity = Literal["error", "warning"]
 StepStatus = Literal["ok", "failed", "skipped"]
 ResponseStatus = Literal["ok", "partial", "invalid_input", "error"]

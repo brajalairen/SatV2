@@ -7,6 +7,7 @@ import type {
   AnalyzeResult,
   ExecutionTrace,
   Modality,
+  OpticalQualityInfo,
   OverlayLayer,
   SceneMetadata,
   TaskType,
@@ -41,7 +42,15 @@ export interface Aoi {
 }
 
 /** What the app is doing while `pending` is true, so the user sees the real step, not one spinner. */
-export type ProgressStage = "searching" | "preparing" | "comparing" | "pairing" | "analysing" | "analysing-change";
+export type ProgressStage =
+  | "searching"
+  | "preparing"
+  | "comparing"
+  | "pairing"
+  | "analysing"
+  | "analysing-change"
+  | "forecasting"
+  | "radar";
 
 /** Each label names a step that is really running. The earlier and later scenes of a comparison are
  *  found and downloaded together inside one server request, so they share one honest label rather
@@ -53,6 +62,8 @@ export const PROGRESS_LABELS: Record<ProgressStage, string> = {
   pairing: "Preparing optical and SAR imagery",
   analysing: "Analysing the selected area",
   "analysing-change": "Analysing changes",
+  forecasting: "Getting the weather forecast",
+  radar: "Preparing Sentinel-1 radar imagery",
 };
 
 interface AppState {
@@ -71,6 +82,9 @@ interface AppState {
   /** Provenance of the scenes retrieved for this result, oldest first: one, or two for a comparison.
    *  Empty when the imagery was the user's own. */
   scenes: SceneMetadata[];
+  /** What the optical scene showed of the selected area for a water question, and whether radar
+   *  was used instead (D-030). null when no optical scene was assessed. */
+  opticalQuality: OpticalQualityInfo | null;
   /** Overlays the user has switched off; a result may carry several. */
   hiddenOverlays: Set<string>;
 
@@ -241,6 +255,84 @@ export function nextAnalysisSource(layers: Layer[], aoi: Aoi | null): AnalysisSo
   return { kind: "none" };
 }
 
+const MIXED_QUESTION =
+  "This asks for a weather forecast and a satellite analysis at once, which is not supported yet. " +
+  "Please ask the weather question and the imagery question separately.";
+
+/**
+ * Asks the server which specialist a question is for, and answers it here unless it is for imagery.
+ * Returns true when the question was handled (a weather answer, a refusal, or a failure), false when
+ * the imagery flow should take it. Weather is an optional capability (D-029), not an SIH requirement.
+ *
+ * The forecast is for a point inside the drawn area, whatever its shape; failing that, inside the
+ * footprint of the images in use, and the answer says which.
+ */
+async function answerIfNotImagery(
+  query: string,
+  set: (partial: Partial<AppState>) => void,
+  get: () => AppState,
+): Promise<boolean> {
+  const controller = new AbortController();
+  inflight = controller;
+  const timer = setTimeout(() => controller.abort("timeout"), ANALYSIS_TIMEOUT_MS);
+  set({ pending: true, stage: null, error: null });
+  let forecasting = false;
+  try {
+    const routed = await api.route(query, controller.signal);
+    if (controller.signal.aborted) throw controller.signal.reason;
+    if (routed.route === "imagery") {
+      set({ pending: false });
+      return false;
+    }
+    if (routed.route === "mixed") {
+      set({ pending: false, error: routed.message ?? MIXED_QUESTION });
+      return true;
+    }
+
+    const { aoi, layers } = get();
+    const geometry = areaGeometry(aoi);
+    const footprint = selectAnalysisImages(layers).find((layer) => layer.summary.bounds_wgs84)?.summary.bounds_wgs84;
+    if (!geometry && !footprint) {
+      set({ pending: false, error: "Select an area on the map to get a weather forecast for it. Any shape works." });
+      return true;
+    }
+    forecasting = true;
+    set({ stage: "forecasting", result: null, scenes: [], opticalQuality: null, detailsOpen: false, hiddenOverlays: new Set() });
+    const result = await api.weather(
+      query,
+      geometry
+        ? { aoiGeometry: geometry, aoiBbox: aoi!.bounds, areaSource: "drawn area" }
+        : { aoiBbox: footprint!, areaSource: "image footprint" },
+      controller.signal,
+    );
+    set({ result, scenes: [], pending: false, stage: null });
+    return true;
+  } catch (error) {
+    // A server that predates routing (no /api/route) has no weather capability either: its imagery
+    // flow is all it offers, so the question goes there as it did before.
+    if (!forecasting && !controller.signal.aborted && error instanceof ApiError && [404, 405].includes(error.status)) {
+      set({ pending: false });
+      return false;
+    }
+    const message = controller.signal.aborted
+      ? controller.signal.reason === "timeout"
+        ? TIMED_OUT
+        : STOPPED_WAITING
+      : error instanceof ApiError
+        ? forecasting
+          ? `Could not get the weather forecast. ${error.message}`
+          : error.message
+        : forecasting
+          ? "Could not get the weather forecast."
+          : "The question could not be sent to the server.";
+    set({ error: message, pending: false, stage: null });
+    return true;
+  } finally {
+    clearTimeout(timer);
+    if (inflight === controller) inflight = null;
+  }
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   layers: [],
   aoi: null,
@@ -251,6 +343,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   stage: null,
   result: null,
   scenes: [],
+  opticalQuality: null,
   error: null,
   hiddenOverlays: new Set(),
 
@@ -326,6 +419,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   runAnalysis: async (query, forcedTask) => {
+    // Weather first: a weather question is answered by its own specialist and must never reach the
+    // imagery flow below, which would retrieve Sentinel imagery for it. Below that line nothing changed.
+    if (!forcedTask && (get().aoi || get().layers.length) && (await answerIfNotImagery(query, set, get))) return;
+
     const { layers, aoi } = get();
     const source = nextAnalysisSource(layers, aoi);
 
@@ -351,6 +448,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       error: null,
       result: null,
       scenes: [],
+      opticalQuality: null,
       detailsOpen: false,
       hiddenOverlays: new Set(),
     });
@@ -361,6 +459,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const own = source.kind === "images" ? source.images : [];
       let images = own.map((l) => ({ upload_id: l.id, modality: l.modality, acquired: l.acquired }));
       let scenes: SceneMetadata[] = [];
+      let opticalQuality: OpticalQualityInfo | null = null;
       let comparing = false;
 
       if (retrieving && aoi) {
@@ -370,7 +469,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (controller.signal.aborted) return;
 
         comparing = fetched.mode === "temporal";
-        stage = comparing ? "comparing" : fetched.mode === "cross_modal" ? "pairing" : "preparing";
+        stage = comparing
+          ? "comparing"
+          : fetched.mode === "cross_modal"
+            ? "pairing"
+            : fetched.mode === "sar" || fetched.mode === "sar_fallback"
+              ? "radar"
+              : "preparing";
+        opticalQuality = fetched.optical_quality ?? null;
         set({ stage });
         // Oldest first: the existing bi-temporal analysis reads image 1 as "before", image 2 as "after".
         // A sensor pair is optical then SAR, each upload carrying its modality; order does not matter there.
@@ -401,7 +507,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ? { forcedTask, signal: controller.signal }
           : { aoiBbox: aoi?.bounds ?? null, aoiGeometry: areaGeometry(aoi), forcedTask, signal: controller.signal },
       );
-      set({ result, scenes, pending: false, stage: null });
+      set({ result, scenes, opticalQuality, pending: false, stage: null });
     } catch (error) {
       const analysing = stage === "analysing" || stage === "analysing-change";
       const message = controller.signal.aborted
@@ -427,7 +533,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   cancelAnalysis: () => inflight?.abort("cancelled"),
 
   clearResult: () =>
-    set({ result: null, scenes: [], detailsOpen: false, error: null, hiddenOverlays: new Set() }),
+    set({ result: null, scenes: [], opticalQuality: null, detailsOpen: false, error: null, hiddenOverlays: new Set() }),
 
   toggleOverlay: (url) =>
     set((state) => {

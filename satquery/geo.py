@@ -196,6 +196,70 @@ def is_bounding_box(geometry: dict, tolerance: float = 1e-9) -> bool:
     return axis_aligned and len(corners) == 4
 
 
+def _ring_area_centroid(ring: list) -> tuple[float, float, float]:
+    """Signed area and centroid of one ring (shoelace), in degree units."""
+    area = cx = cy = 0.0
+    for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+        cross = x0 * y1 - x1 * y0
+        area += cross
+        cx += (x0 + x1) * cross
+        cy += (y0 + y1) * cross
+    area /= 2
+    if abs(area) < 1e-15:  # degenerate: fall back to the mean vertex
+        xs, ys = zip(*ring)
+        return 0.0, sum(xs) / len(xs), sum(ys) / len(ys)
+    return area, cx / (6 * area), cy / (6 * area)
+
+
+def _crossings(rings: list, latitude: float) -> list[float]:
+    """Longitudes where the horizontal line at `latitude` crosses any ring's edges."""
+    xs = []
+    for ring in rings:
+        for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+            if (y0 > latitude) != (y1 > latitude):
+                xs.append(x0 + (latitude - y0) * (x1 - x0) / (y1 - y0))
+    return sorted(xs)
+
+
+def representative_point(geometry: dict) -> tuple[float, float]:
+    """(longitude, latitude) of one point guaranteed to lie inside a drawn area.
+
+    The area's centre (centroid) for convex shapes such as rectangles and circles. A concave shape
+    (an L, a U) or a ring can have its centroid outside itself, so then the point is the middle of
+    the widest inside stretch along the centroid's latitude. For a MultiPolygon, the largest part.
+    Planar in longitude/latitude, which is adequate at area scale; an area crossing the
+    antimeridian is not supported.
+    """
+    # GeoJSON rings repeat their first position at the end; the arithmetic below closes them itself.
+    polygons = [[[(float(p[0]), float(p[1])) for p in ring[:-1]] for ring in polygon]
+                for polygon in _polygons(geometry)]
+    largest = max(polygons, key=lambda polygon: abs(_ring_area_centroid(polygon[0])[0]))
+    _, lon, lat = _ring_area_centroid(largest[0])
+    xs = _crossings(largest, lat)
+    inside = [(a, b) for a, b in zip(xs[0::2], xs[1::2])]  # even-odd rule: holes break the stretches
+    if any(a <= lon <= b for a, b in inside):
+        return lon, lat
+    if inside:
+        a, b = max(inside, key=lambda stretch: stretch[1] - stretch[0])
+        return (a + b) / 2, lat
+    return largest[0][0]  # degenerate shape: one of its own vertices
+
+
+def area_extent_km(geometry: dict) -> tuple[float, float]:
+    """Approximate (east-west, north-south) extent of a drawn area in km, latitude-corrected."""
+    import math
+
+    west, south, east, north = geometry_bounds(geometry)
+    width = abs(east - west) * 111.32 * math.cos(math.radians((south + north) / 2))
+    return width, abs(north - south) * 110.57
+
+
+def bbox_geometry(bbox: tuple[float, float, float, float]) -> dict:
+    """A WGS84 (west, south, east, north) box as a GeoJSON Polygon."""
+    west, south, east, north = bbox
+    return {"type": "Polygon", "coordinates": [[[west, south], [east, south], [east, north], [west, north], [west, south]]]}
+
+
 @dataclass(frozen=True)
 class Crop:
     """The result of restricting a raster to a drawn area."""

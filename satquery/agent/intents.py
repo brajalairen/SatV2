@@ -72,6 +72,17 @@ def needs_optical_and_sar(query: str) -> str | None:
     return None
 
 
+def needs_sar_only(query: str) -> str | None:
+    """The radar phrase of a question that asks for SAR alone ("use radar to find the water"), or None.
+
+    Naming optical too, or asking for fusion, is the joint optical + SAR path instead (D-030).
+    """
+    if needs_optical_and_sar(query):
+        return None
+    sar = SAR_TERMS.search(query)
+    return sar.group(0) if sar else None
+
+
 def find_area_targets(query: str) -> list[str]:
     """Every area class the query names, in AREA_TARGETS order ("built-up and water" -> both)."""
     text = query.lower()
@@ -83,6 +94,44 @@ def cross_modal_classes(query: str) -> list[str]:
     """Which classes a cross-modal query asks about; both when it names neither."""
     named = find_area_targets(query)
     return [c for c in CROSS_MODAL_CLASSES if c in named] or list(CROSS_MODAL_CLASSES)
+
+
+# Is it a weather question? Weather is an optional capability answered by its own specialist
+# (D-029), never by imagery, so it is decided before any imagery is retrieved.
+# Unambiguous weather words count on their own ("rainforest" does not: \brain needs a boundary).
+# Words that also describe what imagery shows ("snow on the peaks", "cloud cover in this scene",
+# "wind turbines") count only with a forecast or time cue.
+WEATHER_TERMS = re.compile(r"\b(?:weather|forecasts?|rain(?:s|y|ing|fall|falls|ed)?|precipitation|drizzl\w*|"
+                           r"thunder\w*|humid(?:ity)?|temperatures?|heat ?waves?|downpours?|monsoons?)\b", re.I)
+AMBIGUOUS_WEATHER_TERMS = re.compile(r"\b(?:snow\w*|cloud(?:s|y)?|fog(?:gy)?|storm(?:s|y)?|wind(?:s|y)?|sunny|"
+                                     r"sunshine|hot|cold|warm|chilly|freez\w*|frost\w*|hail\w*|cyclones?)\b", re.I)
+FORECAST_CUES = re.compile(r"\b(?:will|going to|gonna|expected|forecast\w*|tomorrow|tonight|today|now|later|"
+                           r"this (?:week|weekend|morning|afternoon|evening)|next \w+|upcoming|coming days)\b", re.I)
+# Satellite-analysis wording. Together with a weather cue the question asks two specialists at once,
+# which is not supported yet, so it is refused with a request to ask separately.
+IMAGERY_CUES = re.compile(r"\b(?:images?|imagery|scenes?|satellite|sentinel\S*|sar|radar|optical|multi-?spectral|"
+                          r"ndvi|ndwi|land[- ]?cover|built[- ]?up|buildings?|water bod(?:y|ies)|vegetation|"
+                          r"what (?:has )?changed|any changes|change detection|highlight|segment\w*)\b", re.I)
+
+
+def needs_weather(query: str) -> str | None:
+    """The phrase that makes `query` a weather question, or None."""
+    strong = WEATHER_TERMS.search(query)
+    if strong:
+        return strong.group(0)
+    ambiguous = AMBIGUOUS_WEATHER_TERMS.search(query)
+    return ambiguous.group(0) if ambiguous and FORECAST_CUES.search(query) else None
+
+
+def route_query(query: str) -> tuple[str, str]:
+    """("weather" | "imagery" | "mixed", the rule that decided). Wording only: no I/O, no planning."""
+    weather = needs_weather(query)
+    if not weather:
+        return "imagery", "no weather cue -> satellite analysis"
+    imagery = IMAGERY_CUES.search(query)
+    if imagery:
+        return "mixed", f"weather cue '{weather}' and satellite-analysis cue '{imagery.group(0)}'"
+    return "weather", f"weather cue '{weather}' -> weather specialist"
 
 
 def needs_multiple_dates(query: str) -> str | None:
@@ -137,4 +186,5 @@ COMPATIBLE_TASKS = {
     "single_sar": {"vqa", "caption", "grounding"},
     "pair_bitemporal": {"change_analysis"},
     "pair_cross_modal": {"cross_modal_analysis"},
+    "area_only": {"weather_forecast"},
 }

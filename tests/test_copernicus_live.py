@@ -141,3 +141,37 @@ def test_one_live_optical_sar_retrieval_feeds_the_cross_modal_pipeline(tmp_path)
     fusion = next(step for step in response.trace.steps if step.tool == "fusion.cross_modal")
     assert fusion.status == "ok" and set(fusion.outputs) == {"water", "built_up"}
     print("  " + response.answer.replace("\n", "\n  "))
+
+
+# Loktak Lake, Manipur: the area where the tile's catalogue cloud cover hid a cloud-covered lake (D-030).
+LOKTAK = (93.769, 24.508, 93.8705, 24.5998)
+
+
+def test_one_live_water_assessment_uses_the_areas_own_clouds(provider, tmp_path):
+    """Clouds change daily, so this checks that the verdict follows the area's scene classification
+    consistently, and that the radar fallback works whenever the area is obscured."""
+    from datetime import date
+
+    from satquery.providers import quality
+    from satquery.providers.copernicus import check_same_grid
+
+    scene = provider.retrieve(LOKTAK, bands_for_target("water"), tmp_path / "scene.tif")
+    scl = provider.retrieve_scene_classification(LOKTAK, scene.metadata.acquired, tmp_path / "scl.tif")
+    check_same_grid(scene.path, scl, compare_band_count=False)
+    verdict = quality.assess(scl, max_affected_fraction=0.20, min_clear_pixels=256)
+    print(f"\n  {scene.metadata.scene_id} {scene.metadata.acquired}: tile cloud {scene.metadata.cloud_cover}% | "
+          f"area affected {verdict.affected_fraction:.1%} | usable {verdict.usable}")
+    assert verdict.pixels == scene.metadata.width * scene.metadata.height, "the verdict covers the area exactly"
+    assert verdict.usable == (verdict.affected_fraction < 0.20 and verdict.clear_pixels >= 256)
+    if not verdict.usable:
+        sar = provider.retrieve_sar_near(LOKTAK, date.fromisoformat(scene.metadata.acquired), tmp_path / "sar.tif")
+        check_same_grid(scene.path, sar.path, compare_band_count=False)
+        print(f"  fallback: {sar.metadata.satellite} {sar.metadata.acquired}")
+        assert load_image(sar.path, modality="sar").band_names == ["VV", "VH"]
+
+
+def test_one_live_radar_only_retrieval(provider, tmp_path):
+    sar = provider.retrieve_sar(LOKTAK, tmp_path / "sar.tif")
+    print(f"\n  latest radar: {sar.metadata.scene_id} | {sar.metadata.acquired} | {sar.metadata.width}x{sar.metadata.height}")
+    assert sar.metadata.satellite.startswith("Sentinel-1") and sar.metadata.modality == "sar"
+    assert load_image(sar.path, modality="sar").band_names == ["VV", "VH"]

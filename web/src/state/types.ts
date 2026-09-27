@@ -4,8 +4,15 @@
  */
 
 export type Modality = "optical" | "sar";
-export type InputConfig = "single_optical" | "single_sar" | "pair_cross_modal" | "pair_bitemporal";
-export type TaskType = "vqa" | "caption" | "grounding" | "change_analysis" | "cross_modal_analysis";
+/** "area_only": a drawn area and no imagery, as for a weather question (optional capability). */
+export type InputConfig = "single_optical" | "single_sar" | "pair_cross_modal" | "pair_bitemporal" | "area_only";
+export type TaskType =
+  | "vqa"
+  | "caption"
+  | "grounding"
+  | "change_analysis"
+  | "cross_modal_analysis"
+  | "weather_forecast";
 export type Severity = "error" | "warning";
 export type StepStatus = "ok" | "failed" | "skipped";
 export type ResponseStatus = "ok" | "partial" | "invalid_input" | "error";
@@ -132,6 +139,39 @@ export interface AnalyzeResult {
   area: AreaScope | null;
   /** The uploads this result ran on, in input order. */
   upload_ids: string[];
+  /** Present only for a weather answer: where and when the forecast came from. */
+  weather?: WeatherInfo | null;
+}
+
+/** Provenance of a weather answer. Mirrors satquery.server.WeatherInfo. */
+export interface WeatherInfo {
+  provider: string;
+  model: string | null;
+  /** Required with the data (CC BY 4.0): always shown with a forecast. */
+  attribution: string;
+  attribution_url: string;
+  area_source: "drawn area" | "image footprint";
+  area_bbox_wgs84: [number, number, number, number];
+  /** East-west, north-south, in km. */
+  area_extent_km: [number, number];
+  /** (longitude, latitude) the forecast is for: the marker on the map. */
+  point_wgs84: [number, number];
+  /** The provider's model grid point, which can differ slightly from the point asked for. */
+  grid_point_wgs84: [number, number] | null;
+  elevation_m: number | null;
+  timezone: string | null;
+  /** Local dates, first and last. */
+  period: [string, string] | null;
+  retrieved_at: string | null;
+  cached: boolean;
+}
+
+/** Which specialist a question is for. Mirrors satquery.server.RouteResult. */
+export interface RouteResult {
+  route: "weather" | "imagery" | "mixed";
+  rule: string;
+  /** For "mixed": what to do instead. */
+  message: string | null;
 }
 
 export interface UploadInfo {
@@ -165,6 +205,9 @@ export interface Health {
   imagery_provider: string | null;
   /** Whether imagery can be fetched for a drawn area instead of uploading a GeoTIFF. */
   imagery_available: boolean;
+  /** Weather forecast source when enabled, else null. Never a credential. */
+  weather_provider: string | null;
+  weather_available: boolean;
 }
 
 /** Provenance for one retrieved scene. Mirrors satquery.providers.SceneMetadata. */
@@ -222,9 +265,32 @@ export interface CrossModalInfo {
   explanation: string;
 }
 
+/** How much of the selected area an optical scene shows, and whether it was usable for a water
+ *  question. Mirrors satquery.server.OpticalQualityInfo. Never the tile's catalogue cloud cover. */
+export interface OpticalQualityInfo {
+  /** The optical scene that was assessed. */
+  scene: SceneMetadata;
+  pixels: number;
+  clear_pixels: number;
+  /** Cloud, cloud shadow or no data, as a share of the selected area. */
+  affected_fraction: number;
+  class_fractions: Record<string, number>;
+  /** The configured limit: a SatQuery heuristic, not a scientific constant. */
+  max_affected_fraction: number;
+  min_clear_pixels: number;
+  usable: boolean;
+  /** Why the optical scene was not used. */
+  reason: string | null;
+  method: string;
+  /** The affected pixels were left out of the optical analysis. */
+  masked: boolean;
+}
+
 export interface FetchImageryResult {
-  /** "temporal" when the question needs two dates; "cross_modal" when it asks for optical and SAR together. */
-  mode: "single" | "temporal" | "cross_modal";
+  /** "temporal" when the question needs two dates; "cross_modal" when it asks for optical and SAR
+   *  together; "sar" when it asks for radar alone; "sar_fallback" when a water question's optical
+   *  scene was too obscured and Sentinel-1 answers instead. */
+  mode: "single" | "temporal" | "cross_modal" | "sar" | "sar_fallback";
   /** The most recent scene (the optical one of a sensor pair), kept for single-date clients. */
   upload: UploadInfo;
   metadata: SceneMetadata;
@@ -232,6 +298,8 @@ export interface FetchImageryResult {
   images: FetchedScene[];
   temporal: TemporalInfo | null;
   cross_modal?: CrossModalInfo | null;
+  /** Present whenever a water question's optical scene was assessed. */
+  optical_quality?: OpticalQualityInfo | null;
   cached: boolean;
 }
 

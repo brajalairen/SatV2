@@ -90,6 +90,13 @@ class NoSarImagery(RetrievalError):
     status, code = 404, "no_sar_imagery"
 
 
+class SarTemporalUnsupported(RetrievalError):
+    """A radar question about change over time: two-date Sentinel-1 retrieval does not exist yet, and
+    answering it with optical imagery instead would ignore what was asked."""
+
+    status, code = 422, "sar_temporal_unsupported"
+
+
 class GridsIncompatible(RetrievalError):
     """The two rasters do not share a pixel grid, so no pixel-wise comparison is run."""
 

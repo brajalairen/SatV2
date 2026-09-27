@@ -11,6 +11,63 @@ In ~2 days we submit the **first-round** entry: a PPT, a demo video, and a **wor
 - **Rule:** a convincing, working end-to-end demo beats polish. Build the smallest version of the approved architecture that supports the demo and can be extended later.
 - **Tie-break:** when polishing an existing part competes with building a missing part the demo needs, build the missing part.
 
+## D-030 · Water: optical first, measured over the selected area, radar when optical cannot see (2026-09-27, user decision)
+- **Why:** at Loktak Lake "Highlight the water body" answered "No water was found". The trace showed NDWI had
+  found the lake (45% of the area) and the answer repeated the VLM's miss (0%, a dark cloud-stretched render).
+  The catalogue listed the Sentinel-2 tile at 16.61% cloud; Sentinel-2's own scene classification put the
+  **selected area** at 42.0% cloud or cloud shadow. The existing Sentinel-1 path was reachable only by wording.
+- **1. NDWI first.** Single-image grounding of water or vegetation on multispectral input plans
+  `optical.spectral_indices` as primary evidence and `vlm.segment` as secondary; the answer, regions and overlay
+  come from NDWI > 0 (water) or NDVI > 0.3 (vegetation), and the VLM's figure is quoted beside them, never in
+  their place. RGB or panchromatic input keeps the VLM. Same rule as `_bitemporal` and `_cross_modal` (D-028).
+- **2. The area's own optical quality** (`satquery/providers/quality.py`). For a water question on the
+  single-date retrieval path, Sentinel-2 L2A's Scene Classification Layer is rendered for the same day, tiles
+  and grid as the bands (the grid is the drawn rectangle). Affected = SCL 0 no data, 1 saturated or defective,
+  3 cloud shadow, 8/9 cloud, 10 thin cirrus; "unclassified" and "dark area" count as ground. The tile's catalogue
+  cloud cover is **never** the trigger.
+- **3. Fallback rule:** the optical scene is unusable when affected ≥ `optical_max_affected_fraction` (0.20) of
+  the area, **or** fewer than `optical_min_clear_pixels` (256) clear pixels remain. Both are settings
+  (`SATQUERY_OPTICAL_MAX_AFFECTED`, `SATQUERY_OPTICAL_MIN_CLEAR_PIXELS`) and **SatQuery heuristics, not
+  scientific constants**. Usable: affected pixels become nodata and NDWI runs on the clear ones. Unusable: only
+  then is the Sentinel-1 VV+VH scene nearest the optical date (within 12 days) retrieved, and the water map comes
+  from radar (`sar.water_mask`). No radar scene either: a structured `no_sar_imagery` error, never the unusable
+  optical scene. "No water found" on a clear scene is not a reason for radar.
+- **4. Explicit radar questions** ("use radar…", "using SAR…", "…Sentinel-1") go straight to the latest
+  Sentinel-1 scene (`needs_sar_only`), with no optical scene. Radar plus change over time is refused
+  (`sar_temporal_unsupported`): two-date radar retrieval does not exist. Naming optical and SAR together stays
+  the D-028 joint path.
+- **5. Not changed here:** the SAR water threshold (D-009). A physical sanity bound is a separate follow-up.
+- **Scope:** the fallback applies to water questions on the Copernicus single-date path only. Uploaded images,
+  temporal and joint optical + SAR retrieval, and non-water questions are unchanged.
+
+## D-029 · Weather forecasts as an optional specialist (2026-09-27, user decision) [R1-OPT]
+- **Not an SIH requirement.** Weather is a product enhancement. It must never be presented as SIH scope, and
+  nothing in the SIH pipeline depends on it. D-012 excludes live retrieval, and weather is live data: this entry is
+  the exception, recorded here.
+- **What:** a question about the weather over a selected area (any drawn shape, or failing that the footprint of the
+  images in use) gets a short-range forecast for one point inside it, through the same command bar and result card.
+- **Routing, before any imagery is touched:** `intents.route_query` decides weather / imagery / mixed from the wording
+  alone. `/api/route` exposes only that. The client asks it first, and `/api/fetch-imagery` refuses weather and
+  mixed questions (422) before constructing the Copernicus provider. Unambiguous weather words route on their own;
+  words that also describe imagery (snow, cloud, fog, storm, wind, hot, cold) need a forecast or time cue.
+  Satellite questions never call the weather provider.
+- **Pipeline:** `api.answer_weather` runs intent (`agent/forecast.py`) → plan (`weather.forecast`, permitted
+  parameters: point and abstract period) → executor → aggregator `_weather`, with the same trace, reports and card as
+  `analyze()`. Contract additions: `TaskType += weather_forecast`, `InputConfig += area_only`.
+- **Provider: Open-Meteo** (`specialists/weather.py`). Free for non-commercial use without a key (600/min,
+  10,000/day), 16-day horizon, CC BY 4.0: the attribution is shown in every answer, card and report. The team must
+  confirm the SIH demo counts as non-commercial; commercial use needs a paid plan (`OPEN_METEO_API_KEY`, customer
+  endpoint; the key is backend-only and never logged or returned).
+- **Point, not area:** a point guaranteed inside the drawn shape (centroid, corrected for concave shapes and holes),
+  marked on the map. Over 10 km across, a `point_forecast` warning and the answer say one point cannot represent it.
+- **Horizon:** today to 16 days, resolved on the location's own calendar ("tomorrow" in Mumbai). Past, long-range,
+  seasonal, whole-month and monsoon-onset questions are refused, quoting the user's words; nothing is estimated.
+- **Mixed questions** (weather plus imagery analysis) are refused with a request to ask separately. Composing two
+  specialists needs multi-intent planning and a two-part answer card: separate work.
+- **Failures** (off, timeout, rate limit, provider error, malformed or empty response) are typed errors: the step is
+  recorded as failed in the trace and the card says why. There is no fake fallback.
+- **Cache:** in memory, 30 minutes, keyed by the point to 0.01 degrees; always the whole 16 days, sliced per question.
+
 ## D-028 · Optical + SAR joint analysis end to end, with Sentinel-1 pairing (2026-09-27, requested by the user; choices below PROPOSED, team to confirm)
 - **Why:** the cross-modal pair is mandatory (SIH). Before this, an optical+SAR pair reached `fusion.cross_modal`
   only if both modalities were declared correctly, and the web upload declared every file optical. Measured on the

@@ -92,6 +92,12 @@ export function HelpPanel() {
           cloud-cover filters below are not wired to it. Everything else runs on the files you provide.
         </p>
         <p className="mt-2">
+          <strong className="font-medium text-muted">Weather (optional, not part of the SIH task).</strong> A weather
+          question about a selected area gets a short-range forecast, up to 16 days, for one point inside it (marked
+          on the map), from Open-Meteo. Long-range, seasonal and past weather are not forecast, and a question that
+          mixes weather with imagery analysis should be asked as two questions.
+        </p>
+        <p className="mt-2">
           Confidence values are uncalibrated and every one states the method that produced it. Several tools are
           heuristic and are labelled as such in the trace.
         </p>

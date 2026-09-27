@@ -20,6 +20,8 @@ import type { AnalyzeResult, UploadInfo } from "./types";
 
 const analyze = vi.fn();
 const fetchImagery = vi.fn();
+const route = vi.fn();
+const weather = vi.fn();
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
   return {
@@ -28,6 +30,8 @@ vi.mock("./api", async (importOriginal) => {
       ...actual.api,
       analyze: (...args: unknown[]) => analyze(...args),
       fetchImagery: (...args: unknown[]) => fetchImagery(...args),
+      route: (...args: unknown[]) => route(...args),
+      weather: (...args: unknown[]) => weather(...args),
     },
   };
 });
@@ -107,7 +111,11 @@ function analyseOptions(): { aoiBbox: unknown; aoiGeometry: unknown } {
 beforeEach(() => {
   analyze.mockReset();
   fetchImagery.mockReset();
+  route.mockReset();
+  weather.mockReset();
   analyze.mockResolvedValue(result(["a"]));
+  // Every question is an imagery question unless a test says otherwise: the existing flows unchanged.
+  route.mockResolvedValue({ route: "imagery", rule: "no weather cue -> satellite analysis", message: null });
   useAppStore.setState({
     layers: [], aoi: null, result: null, error: null, pending: false, drawMode: null,
     stage: null, scenes: [], basemap: "standard",
@@ -379,7 +387,8 @@ describe("when retrieval or analysis fails", () => {
 
     const running = useAppStore.getState().runAnalysis("what is here?");
     expect(useAppStore.getState().pending).toBe(true);
-    expect(useAppStore.getState().stage).toBe("searching");
+    // Retrieval starts once the question has been routed (weather is checked first, D-029).
+    await vi.waitFor(() => expect(useAppStore.getState().stage).toBe("searching"));
 
     useAppStore.getState().cancelAnalysis();
     reject(new DOMException("aborted", "AbortError"));
@@ -650,5 +659,166 @@ describe("fetching optical and SAR together", () => {
       ["s2", "optical", true],
       ["s1", "sar", true],
     ]);
+  });
+});
+
+describe("asking about the weather", () => {
+  const circleAoi = (): Aoi => {
+    const ring = Array.from({ length: 33 }, (_, i) => {
+      const angle = (i % 32) * (Math.PI / 16);
+      return [73 + 0.02 * Math.cos(angle), 19 + 0.02 * Math.sin(angle)];
+    });
+    return { feature: { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [ring] } },
+             bounds: [72.98, 18.98, 73.02, 19.02] };
+  };
+
+  function weatherResult() {
+    const answer = result([]);
+    answer.response.task = "weather_forecast";
+    return { ...answer, weather: { point_wgs84: [73, 19], area_source: "drawn area" } };
+  }
+
+  beforeEach(() => {
+    route.mockResolvedValue({ route: "weather", rule: "weather cue 'rain' -> weather specialist", message: null });
+    weather.mockResolvedValue(weatherResult());
+  });
+
+  it("answers from the weather specialist and never retrieves or analyses imagery", async () => {
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    const stages: string[] = [];
+    const stop = useAppStore.subscribe((state) => {
+      if (state.stage && stages.at(-1) !== state.stage) stages.push(state.stage);
+    });
+
+    await useAppStore.getState().runAnalysis("Will it rain here this week?");
+    stop();
+
+    expect(route).toHaveBeenCalledWith("Will it rain here this week?", expect.any(AbortSignal));
+    expect(weather.mock.calls[0]?.[1]).toMatchObject({ areaSource: "drawn area", aoiBbox: [10, 50, 11, 51] });
+    expect(fetchImagery).not.toHaveBeenCalled();
+    expect(analyze).not.toHaveBeenCalled();
+    expect(stages).toEqual(["forecasting"]);
+    expect(useAppStore.getState().result?.weather?.point_wgs84).toEqual([73, 19]);
+    expect(useAppStore.getState().pending).toBe(false);
+  });
+
+  it("works over any drawn shape, not only a rectangle", async () => {
+    useAppStore.setState({ layers: [], aoi: circleAoi() });
+    await useAppStore.getState().runAnalysis("Will it rain here this week?");
+
+    expect(weather.mock.calls[0]?.[1].aoiGeometry.type).toBe("Polygon");
+    expect(useAppStore.getState().error).toBeNull();
+  });
+
+  it("uses the footprint of the images in use when no area is drawn, and says so", async () => {
+    useAppStore.setState({ layers: [upload("a")], aoi: null });
+    await useAppStore.getState().runAnalysis("Will it rain tomorrow?");
+
+    expect(weather.mock.calls[0]?.[1]).toEqual({ aoiBbox: [10, 50, 11, 51], areaSource: "image footprint" });
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it("asks for an area when nothing georeferenced is selected", async () => {
+    useAppStore.setState({ layers: [upload("a", { summary: { ...upload("a").summary, bounds_wgs84: null } })], aoi: null });
+    await useAppStore.getState().runAnalysis("Will it rain tomorrow?");
+
+    expect(weather).not.toHaveBeenCalled();
+    expect(useAppStore.getState().error).toMatch(/Select an area/);
+  });
+
+  it("refuses a mixed weather and imagery question and runs neither", async () => {
+    route.mockResolvedValue({ route: "mixed", rule: "both", message: "Please ask them separately." });
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    await useAppStore.getState().runAnalysis("What is the weather and what changed here?");
+
+    expect(useAppStore.getState().error).toBe("Please ask them separately.");
+    expect(weather).not.toHaveBeenCalled();
+    expect(fetchImagery).not.toHaveBeenCalled();
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it("says a forecast failed rather than showing anything in its place", async () => {
+    weather.mockRejectedValue(new ApiError("Weather forecasts are switched off on this server.", 503, "weather_not_configured"));
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    await useAppStore.getState().runAnalysis("Will it rain tomorrow?");
+
+    expect(useAppStore.getState().result).toBeNull();
+    expect(useAppStore.getState().error).toBe("Could not get the weather forecast. Weather forecasts are switched off on this server.");
+  });
+
+  it("still works against a server that predates routing: its imagery flow takes the question", async () => {
+    route.mockRejectedValue(new ApiError("Method Not Allowed", 405));
+    useAppStore.setState({ layers: [upload("a")], aoi: null });
+    await useAppStore.getState().runAnalysis("Describe this image");
+
+    expect(weather).not.toHaveBeenCalled();
+    expect(analyze).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().error).toBeNull();
+  });
+
+  it("sends an imagery question down the unchanged imagery path", async () => {
+    route.mockResolvedValue({ route: "imagery", rule: "no weather cue", message: null });
+    useAppStore.setState({ layers: [upload("a")], aoi: null });
+    await useAppStore.getState().runAnalysis("Describe this image");
+
+    expect(weather).not.toHaveBeenCalled();
+    expect(analyze).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("water under cloud: the radar fallback (D-030)", () => {
+  const optical = { satellite: "Sentinel-2", product_level: "L2A", acquired: "2026-09-19", cloud_cover: 16.61 };
+  const radar = { satellite: "Sentinel-1D", product_level: "GRD", acquired: "2026-09-13", cloud_cover: null, modality: "sar" };
+
+  function quality(usable: boolean) {
+    return {
+      scene: optical, pixels: 1_042_405, clear_pixels: 604_595, affected_fraction: 0.42,
+      class_fractions: { "cloud, high probability": 0.174 }, max_affected_fraction: 0.2, min_clear_pixels: 256,
+      usable, reason: usable ? null : "42.0% of the selected area is cloud, cloud shadow or without valid data",
+      method: "Sentinel-2 L2A scene classification (SCL) over the selected area", masked: false,
+    };
+  }
+
+  function radarFetch(mode: "sar" | "sar_fallback") {
+    const upload1 = { ...upload("s1"), modality: "sar", acquired: "2026-09-13" };
+    return { mode, upload: upload1, metadata: radar, images: [{ role: "sar", upload: upload1, metadata: radar }],
+             temporal: null, optical_quality: mode === "sar_fallback" ? quality(false) : null, cached: false };
+  }
+
+  it("analyses the radar scene the server chose, and keeps why", async () => {
+    fetchImagery.mockResolvedValue(radarFetch("sar_fallback"));
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    const stages: string[] = [];
+    const stop = useAppStore.subscribe((state) => {
+      if (state.stage && stages.at(-1) !== state.stage) stages.push(state.stage);
+    });
+
+    await useAppStore.getState().runAnalysis("Highlight the water body in this image.");
+    stop();
+
+    expect(analyze.mock.calls[0]?.[1]).toEqual([{ upload_id: "s1", modality: "sar", acquired: "2026-09-13" }]);
+    expect(stages).toEqual(["searching", "radar", "analysing"]);
+    expect(useAppStore.getState().opticalQuality?.usable).toBe(false);
+    expect(useAppStore.getState().opticalQuality?.scene.cloud_cover).toBe(16.61);
+    expect(useAppStore.getState().scenes.map((s) => s.satellite)).toEqual(["Sentinel-1D"]);
+  });
+
+  it("an explicit radar question carries no optical check", async () => {
+    fetchImagery.mockResolvedValue(radarFetch("sar"));
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    await useAppStore.getState().runAnalysis("Use radar to find the water.");
+
+    expect(analyze.mock.calls[0]?.[1]).toEqual([{ upload_id: "s1", modality: "sar", acquired: "2026-09-13" }]);
+    expect(useAppStore.getState().opticalQuality).toBeNull();
+  });
+
+  it("a new question clears the previous optical check", async () => {
+    fetchImagery.mockResolvedValue(radarFetch("sar_fallback"));
+    useAppStore.setState({ layers: [], aoi: polygonAoi() });
+    await useAppStore.getState().runAnalysis("Highlight the water body in this image.");
+    fetchImagery.mockResolvedValue(singleFetch({ ...upload("s2"), acquired: "2026-09-19" }, optical));
+    await useAppStore.getState().runAnalysis("Describe this area");
+
+    expect(useAppStore.getState().opticalQuality).toBeNull();
   });
 });

@@ -41,10 +41,12 @@ export function SceneProvenance() {
         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
           <Field label="Source" value={`${latest.satellite} ${latest.product_level}`} />
           <Field label="Acquired" value={latest.acquired || "unknown"} />
-          <Field label="Cloud cover" value={cloudText(latest)} />
+          <Field label="Cloud cover" value={latest.modality === "sar" ? "n/a (radar)" : cloudText(latest)} />
           <Field label="Area analysed" value="Selected area" />
         </dl>
       )}
+
+      <OpticalCheck />
 
       <p className="mt-2 border-t border-line pt-2 text-[10px] leading-relaxed text-faint">
         {latest.provider} · {latest.resolution_m} m · {latest.crs} ·{" "}
@@ -54,6 +56,31 @@ export function SceneProvenance() {
         {latest.attribution}
       </p>
     </section>
+  );
+}
+
+/** What the optical scene showed of the selected area for a water question (D-030): measured from
+ *  Sentinel-2's own scene classification over the area, never the tile's catalogue cloud cover. */
+function OpticalCheck() {
+  const quality = useAppStore((s) => s.opticalQuality);
+  if (!quality) return null;
+  const share = `${(quality.affected_fraction * 100).toFixed(1)}%`;
+  const limit = `${Math.round(quality.max_affected_fraction * 100)}%`;
+  return (
+    <p className="mt-2 border-t border-line pt-2 text-[11px] leading-relaxed text-muted">
+      {quality.usable ? (
+        <>
+          Optical check: {share} of your area is cloud, cloud shadow or no data (Sentinel-2 scene classification)
+          {quality.masked ? "; those pixels were left out of the analysis." : "."}
+        </>
+      ) : (
+        <>
+          Sentinel-2 L2A {quality.scene.acquired} was not used: {quality.reason}. Water was mapped with Sentinel-1
+          radar instead.
+        </>
+      )}{" "}
+      <span className="text-faint">(Radar limit: {limit} of the area, a SatQuery heuristic.)</span>
+    </p>
   );
 }
 

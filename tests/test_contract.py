@@ -30,6 +30,9 @@ MIRRORED = {
     "ComparisonWindow": server.ComparisonWindow,
     "TemporalInfo": server.TemporalInfo,
     "Health": server.Health,
+    "WeatherInfo": server.WeatherInfo,
+    "RouteResult": server.RouteResult,
+    "OpticalQualityInfo": server.OpticalQualityInfo,
 }
 
 

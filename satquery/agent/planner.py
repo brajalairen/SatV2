@@ -28,6 +28,18 @@ def build_plan(intent: Intent, config: InputConfig, images: list[RasterImage], q
     return plan.steps
 
 
+def build_weather_plan(horizon, point: tuple[float, float], area_source: str) -> list[PlanStep]:
+    """One forecast step for the area's representative point (D-029, optional capability).
+
+    `horizon` is a satquery.agent.forecast.ForecastHorizon; `point` is (longitude, latitude).
+    """
+    plan = PlanBuilder()
+    plan.add("weather.forecast", [], f"forecast {horizon.label} at the representative point of the {area_source}",
+             latitude=round(point[1], 4), longitude=round(point[0], 4), start_day=horizon.start_day, days=horizon.days,
+             weekday=horizon.weekday, weekend=horizon.weekend, on_date=horizon.on_date, current=horizon.current)
+    return plan.steps
+
+
 def _has_nir(image: RasterImage) -> bool:
     return image.band("nir") is not None
 
@@ -39,10 +51,15 @@ def _single_optical(plan, intent, image, query):
             plan.add("optical.spectral_indices", [0], "quantify vegetation and water from NIR bands")
     elif intent.task == "vqa":
         plan.add("vlm.vqa", [0], "answer the question", question=query)
+    elif intent.target in ("water", "vegetation") and _has_nir(image):
+        # Multispectral input: the spectral index is the primary evidence and the VLM corroborates it,
+        # as in `_bitemporal` and `_cross_modal`. The VLM was trained on sub-metre imagery and can miss
+        # water on a dark or cloud-stretched 10 m render (Loktak Lake, 2026-09-27: VLM 0%, NDWI found
+        # the lake) -- D-030.
+        plan.add("optical.spectral_indices", [0], f"primary evidence: {intent.target} from spectral indices")
+        plan.add("vlm.segment", [0], f"secondary evidence: segment {intent.target}", target=intent.target)
     elif intent.target in ("water", "building", "vegetation", "road"):
         plan.add("vlm.segment", [0], f"segment {intent.target}", target=intent.target)
-        if intent.target in ("water", "vegetation") and _has_nir(image):
-            plan.add("optical.spectral_indices", [0], "cross-check with spectral indices")
     elif intent.target:
         plan.add("vlm.detect", [0], f"detect {intent.target}", target=intent.target)
     else:

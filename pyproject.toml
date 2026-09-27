@@ -48,5 +48,5 @@ include = ["satquery*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["gpu: needs a GPU and downloaded model weights",
-           "live: calls a real external API (Copernicus); consumes quota"]
+           "live: calls a real external API (Copernicus, Open-Meteo); consumes quota"]
 addopts = "-m 'not gpu and not live'"

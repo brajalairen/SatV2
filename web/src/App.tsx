@@ -13,6 +13,7 @@ import { ResultOverlay } from "./results/ResultOverlay";
 import { api } from "./state/api";
 import { applyTheme, useAppStore } from "./state/useAppStore";
 import { IconButton, Surface, ToastHost } from "./ui/primitives";
+import { BrandMark } from "./ui/BrandMark";
 
 export default function App() {
   const theme = useAppStore((s) => s.theme);
@@ -35,6 +36,7 @@ export default function App() {
       <main className="relative h-full w-full overflow-hidden">
         <MapView>
           <AoiLayer />
+          <BrandMark />
           <Sidebar />
           <ImageCanvas />
           <ResultOverlay />

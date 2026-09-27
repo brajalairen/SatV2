@@ -9,6 +9,7 @@ import { cx, IconButton, Surface } from "../ui/primitives";
 import { ResultActions } from "./ResultActions";
 import { DetailsDrawer } from "./DetailsDrawer";
 import { SceneProvenance } from "./SceneProvenance";
+import { WeatherProvenance } from "./WeatherProvenance";
 import { TemporalAnalysis } from "./TemporalAnalysis";
 import type { ResponseStatus } from "../state/types";
 
@@ -63,6 +64,10 @@ export function ResultOverlay() {
                 {/* Renders only when the imagery was fetched rather than uploaded. */}
                 <div className="mt-3">
                   <SceneProvenance />
+                </div>
+                {/* Renders only for a weather answer. */}
+                <div className="mt-3 empty:hidden">
+                  <WeatherProvenance />
                 </div>
                 <OverlayToggles />
               </>
@@ -160,5 +165,6 @@ export function taskLabel(task: string | null): string | null {
     grounding: "Highlighted region",
     change_analysis: "Change analysis",
     cross_modal_analysis: "Optical + SAR analysis",
+    weather_forecast: "Weather forecast",
   }[task] ?? task;
 }

@@ -116,6 +116,21 @@ def sar_evalscript() -> str:
     )
 
 
+def scl_evalscript() -> str:
+    """Sentinel-2 L2A scene classification (SCL) as one UINT8 band: one class per pixel (cloud,
+    cloud shadow, water, ...). Resampled by nearest neighbour, so classes stay classes."""
+    return (
+        "//VERSION=3\n"
+        "function setup() {\n"
+        "  return {input: [{bands: [\"SCL\"]}],\n"
+        "          output: {bands: 1, sampleType: 'UINT8'}};\n"
+        "}\n"
+        "function evaluatePixel(sample) {\n"
+        "  return [sample.SCL];\n"
+        "}\n"
+    )
+
+
 def _scrub(text: str, limit: int = 300) -> str:
     """Truncate an upstream body and drop anything token-shaped before it reaches a user or log."""
     cleaned = " ".join(str(text).split())
@@ -298,7 +313,13 @@ class CopernicusSentinelProvider:
 
     def _process(self, bbox: tuple[float, float, float, float], bands: list[str],
                  acquired_date: str) -> bytes:
-        return self._render(bbox, {
+        return self._render(bbox, self._sentinel2_day(acquired_date), evalscript(bands))
+
+    @staticmethod
+    def _sentinel2_day(acquired_date: str) -> dict:
+        """The Sentinel-2 L2A data of one day. Shared by the bands and the scene classification, so
+        both come from the same tiles in the same order and describe the same pixels."""
+        return {
             "type": COLLECTION,
             "dataFilter": {
                 # One day, so the raster is the scene that was selected, not a mosaic
@@ -307,7 +328,16 @@ class CopernicusSentinelProvider:
                               "to": f"{acquired_date}T23:59:59Z"},
                 "mosaickingOrder": "leastCC",
             },
-        }, evalscript(bands))
+        }
+
+    def retrieve_scene_classification(self, bbox_wgs84, acquired_date: str, destination: Path) -> Path:
+        """Sentinel-2 L2A's scene classification (cloud, cloud shadow, water, ...) for the selected area
+        on `acquired_date`, on exactly the grid of that day's bands (D-030)."""
+        bbox = tuple(float(v) for v in bbox_wgs84)
+        content = self._render(bbox, self._sentinel2_day(acquired_date), scl_evalscript())
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        return destination
 
     def _render(self, bbox: tuple[float, float, float, float], data: dict, script: str) -> bytes:
         """One Process API request for the area. The output grid depends on the bbox only, so every
@@ -556,6 +586,50 @@ class CopernicusSentinelProvider:
             optical, sar = optical_job.result(), sar_job.result()
         check_same_grid(optical.path, sar.path, compare_band_count=False)
         return optical, sar
+
+    def retrieve_sar_near(self, bbox_wgs84, optical_date: date, destination: Path) -> RetrievedScene:
+        """The Sentinel-1 VV+VH scene closest in time to an optical acquisition, within
+        SAR_MAX_DAYS_APART: the radar fallback for an optical scene too cloudy to use (D-030)."""
+        bbox = tuple(float(v) for v in bbox_wgs84)
+        today = datetime.now(timezone.utc).date()
+        features = self.search_sar(bbox, start=optical_date - timedelta(days=SAR_MAX_DAYS_APART),
+                                   end=min(optical_date + timedelta(days=SAR_MAX_DAYS_APART), today))
+        return self._download_sar(bbox, self.select_sar_scene(features, optical_date), destination,
+                                  alternatives=len(features))
+
+    @staticmethod
+    def select_latest_sar(features: list[dict], days_back: int) -> dict:
+        """The most recent dual-polarisation (VV+VH) scene."""
+        candidates = [f for f in features if f.get("properties", {}).get("s1:polarization") == "DV"
+                      and str(f.get("properties", {}).get("datetime", ""))[:10]]
+        if not candidates:
+            raise NoSarImagery(
+                f"No Sentinel-1 dual-polarisation (VV+VH) scene of this area was found in the last {days_back} days. "
+                "Try another area, or upload a SAR GeoTIFF.")
+        return max(candidates, key=lambda f: str(f["properties"]["datetime"]))
+
+    def sar_cache_key(self, bbox, *, days_back: int | None = None) -> str:
+        """Identity of a radar-only request. "mode" keeps it apart from every other key."""
+        material = json.dumps({
+            "mode": "sar",
+            "bbox": [round(float(v), 6) for v in bbox],
+            "collection": S1_COLLECTION,
+            "days_back": self.days_back if days_back is None else days_back,
+            "resolution_m": self.resolution_m,
+            "bands": S1_BANDS,
+        }, sort_keys=True)
+        return hashlib.sha256(material.encode()).hexdigest()[:16]
+
+    def retrieve_sar(self, bbox_wgs84, destination: Path, *, days_back: int | None = None) -> RetrievedScene:
+        """The most recent Sentinel-1 VV+VH scene of the area, for a question that asks for radar
+        alone ("use radar to find the water"). No optical scene is involved (D-030)."""
+        bbox = tuple(float(v) for v in bbox_wgs84)
+        self.validate_area(bbox)
+        days = self.days_back if days_back is None else days_back
+        today = datetime.now(timezone.utc).date()
+        features = self.search_sar(bbox, start=today - timedelta(days=days), end=today)
+        return self._download_sar(bbox, self.select_latest_sar(features, days), destination,
+                                  alternatives=len(features))
 
     def _download_sar(self, bbox, scene: dict, destination: Path, *, alternatives: int) -> RetrievedScene:
         properties = scene.get("properties", {})

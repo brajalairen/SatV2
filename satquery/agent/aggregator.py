@@ -3,9 +3,10 @@
 from pathlib import Path
 
 from satquery import evidence as ev
-from satquery.raster_analysis import iou
+from satquery.raster_analysis import iou, regions as mask_regions
 from satquery.schemas import Confidence, Evidence, Intent, StepResult
 from satquery.specialists.tools import ToolContext
+from satquery.specialists.weather import HEAVY_RAIN_CODES
 
 
 class Results:
@@ -36,8 +37,8 @@ def _places(regions: list[dict]) -> str:
 
 def aggregate(intent: Intent, ctx: ToolContext, results: list[StepResult], run_dir: Path):
     r = Results(results, ctx)
-    compose = {"caption": _caption, "vqa": _vqa, "grounding": _grounding,
-               "change_analysis": _change, "cross_modal_analysis": _cross_modal}[intent.task]
+    compose = {"caption": _caption, "vqa": _vqa, "grounding": _grounding, "change_analysis": _change,
+               "cross_modal_analysis": _cross_modal, "weather_forecast": _weather}[intent.task]
     answer, confidence, overlays = compose(intent, r, ctx, run_dir)
     step_evidence = [e for s in results for e in s.evidence]
     failed = [s for s in results if s.status == "failed"]
@@ -85,8 +86,39 @@ def _vqa(intent, r, ctx, run_dir):
     return answer, vqa.confidence, [_overlay_evidence(ctx.rgb(0), run_dir, "input", "input image (as analysed)", vqa.step_id, 0, ctx)]
 
 
+# Water and vegetation on multispectral input: the spectral mask is the primary evidence (D-030).
+SPECTRAL_GROUNDING = {"water": ("water", "NDWI > {ndwi_water_threshold:g}", "blue"),
+                      "vegetation": ("vegetation", "NDVI > {ndvi_vegetation_threshold:g}", "green")}
+
+
+def _spectral_grounding(target: str, spectral: StepResult, r, ctx, run_dir):
+    """The spectral mask decides; the VLM's figure is reported beside it as a secondary check, never
+    in its place (it can miss water that the index finds)."""
+    key, rule, color = SPECTRAL_GROUNDING[target]
+    rule = rule.format(**spectral.params)
+    valid = ctx.valid(0)
+    mask = r.mask(spectral, key) & valid
+    fraction = spectral.outputs[f"{key}_fraction"]
+    answer = (f"Highlighted {target}: {_pct(fraction)} of the analysed area by {rule} (spectral index), mainly in the "
+              f"{_places(mask_regions(mask, valid=valid))}." if fraction > 0 else
+              f"No {target} was found in this image by {rule} (spectral index).")
+    vlm = r.get("vlm.segment")
+    if vlm:
+        answer += f" The VLM segmentation, a secondary check, found {_pct(vlm.outputs['fraction'])}."
+    if not valid.all():
+        answer += (f" {_pct(1 - valid.mean())} of the image had no usable data (for example, masked cloud) "
+                   "and is not counted.")
+    confidence = Confidence(value=None, method=f"not estimated: {rule} is a fixed spectral rule (heuristic)")
+    array = ev.overlay(ctx.rgb(0), masks=[(mask, color)])
+    return answer, confidence, [_overlay_evidence(array, run_dir, "grounding", f"{target} ({rule}, highlighted)",
+                                                  spectral.step_id, 0, ctx)]
+
+
 def _grounding(intent, r, ctx, run_dir):
     target = intent.target or "described region"
+    spectral = r.get("optical.spectral_indices")
+    if spectral and intent.target in SPECTRAL_GROUNDING:
+        return _spectral_grounding(intent.target, spectral, r, ctx, run_dir)
     for tool, color in (("vlm.segment", "red"), ("sar.water_mask", "blue"), ("sar.bright_mask", "red")):
         step = r.get(tool)
         if step:
@@ -266,3 +298,132 @@ def _cross_modal(intent, r, ctx, run_dir):
     label = ("optical (left) and SAR false colour (right) with the fused masks: "
              + "; ".join(f"{FUSED_CLASSES[name]['short']}: {FUSED_CLASSES[name]['legend']}" for name in fused))
     return answer, fusion.confidence, layers + [_overlay_evidence(composite, run_dir, "cross_modal", label, fusion.step_id)]
+
+
+# --------------------------------------------------------------------------- weather (D-029, optional)
+
+HEAVY_RAIN_MM = 64.5  # IMD's "heavy rainfall" threshold for 24 h; said wherever it is used
+
+
+def _chance(probability: float | None) -> str:
+    if probability is None:
+        return "not forecast"
+    return "likely" if probability >= 70 else "possible" if probability >= 30 else "unlikely"
+
+
+def _day(iso: str, local_today: str) -> str:
+    from datetime import date
+
+    day = date.fromisoformat(iso)
+    text = day.strftime("%a %d %b")
+    return {0: f"today ({text})", 1: f"tomorrow ({text})"}.get((day - date.fromisoformat(local_today)).days, text)
+
+
+def _first_upper(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def _num(value, digits: int = 0, unit: str = "") -> str:
+    return "n/a" if value is None else f"{value:.{digits}f}{unit}"
+
+
+def _coordinate(latitude: float, longitude: float) -> str:
+    return (f"{abs(latitude):.3f}°{'N' if latitude >= 0 else 'S'}, "
+            f"{abs(longitude):.3f}°{'E' if longitude >= 0 else 'W'}")
+
+
+def _km_between(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Great-circle distance between two (latitude, longitude) points, in km."""
+    import math
+
+    (lat1, lon1), (lat2, lon2) = (tuple(map(math.radians, p)) for p in (a, b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 2 * 6371.0 * math.asin(math.sqrt(h))
+
+
+def _rain_summary(days: list[dict], name, period: str, heavy: bool) -> str:
+    wettest = max(days, key=lambda d: (d["precipitation_probability_max"] or 0, d["precipitation_sum"] or 0))
+    facts = (f"{_num(wettest['precipitation_probability_max'])}% chance, about "
+             f"{_num(wettest['precipitation_sum'], 1)} mm, {wettest['condition']}")
+    if heavy:
+        heavy_days = [d for d in days if d["weather_code"] in HEAVY_RAIN_CODES
+                      or (d["precipitation_sum"] or 0) >= HEAVY_RAIN_MM]
+        if heavy_days:
+            verdict = f"Heavy rain is forecast {', '.join(name(d) for d in heavy_days)} ({facts})."
+        elif len(days) == 1:
+            verdict = (f"Heavy rain is not expected {period}: about {_num(wettest['precipitation_sum'], 1)} mm is "
+                       f"forecast ({_num(wettest['precipitation_probability_max'])}% chance of rain, {wettest['condition']}).")
+        else:
+            verdict = f"Heavy rain is not expected {period}: the wettest day is {name(wettest)} ({facts})."
+        return verdict + (f" (Heavy means the provider's heavy or violent rain code, or at least {HEAVY_RAIN_MM} mm "
+                          "in a day, IMD's 'heavy rainfall' threshold.)")
+    if len(days) == 1:
+        return f"Rain is {_chance(wettest['precipitation_probability_max'])} {name(wettest)}: {facts}."
+    likely = [d for d in days if (d["precipitation_probability_max"] or 0) >= 70]
+    top = wettest["precipitation_probability_max"] or 0
+    if top < 30:
+        return f"Rain is unlikely {period}: the highest chance is {_num(top)}% on {name(wettest)}."
+    return (f"Rain is {_chance(top)} {period}, most likely {name(wettest)} ({facts})"
+            + (f"; rain is likely on {len(likely)} of the {len(days)} days." if likely else "."))
+
+
+def _temperature_summary(days: list[dict], name, period: str) -> str:
+    if len(days) == 1:
+        d = days[0]
+        return (f"{_first_upper(name(d))}: {_num(d['temperature_min'])}–{_num(d['temperature_max'])} °C, "
+                f"{d['condition']}.")
+    known = [d for d in days if d["temperature_max"] is not None and d["temperature_min"] is not None]
+    if not known:
+        return f"No temperatures were forecast {period}."
+    warmest = max(known, key=lambda d: d["temperature_max"])
+    coolest = min(known, key=lambda d: d["temperature_min"])
+    return (f"Temperatures {period} range from {_num(coolest['temperature_min'])} °C to "
+            f"{_num(warmest['temperature_max'])} °C: warmest {name(warmest)} (max {_num(warmest['temperature_max'], 1)} °C), "
+            f"coolest night {name(coolest)} (min {_num(coolest['temperature_min'], 1)} °C).")
+
+
+def _weather(intent, r, ctx, run_dir):
+    """Short-range forecast answer: the focus of the question first, then one line per day."""
+    step = r.get("weather.forecast")
+    if not step:
+        return "", None, []
+    o = step.outputs
+    days, today = o["days"], o["local_today"]
+    wind_unit = o["units"].get("wind_speed_10m_max", "km/h")
+    name = lambda d: _day(d["date"], today)
+    first, last = name(days[0]), name(days[-1])
+    period = (first if len(days) == 1 else
+              f"over the next {len(days)} days ({days[0]['date']} to {days[-1]['date']})" if days[0]["date"] == today
+              else f"from {first} to {last}")
+
+    focus = intent.target
+    if focus == "temperature":
+        summary = _temperature_summary(days, name, period)
+    elif focus == "wind":
+        windiest = max(days, key=lambda d: d["wind_speed_max"] or 0)
+        summary = (f"The strongest wind {period} is forecast {name(windiest)}: up to "
+                   f"{_num(windiest['wind_speed_max'])} {wind_unit} ({windiest['condition']}).")
+    elif focus in ("rain", "heavy rain"):
+        summary = _rain_summary(days, name, period, heavy=focus == "heavy rain")
+    else:
+        summary = _temperature_summary(days, name, period) + " " + _rain_summary(days, name, period, heavy=False)
+
+    lines = [summary]
+    now = o.get("current")
+    if now:
+        lines.append(f"Now ({now['time'][11:16]} local): {_num(now['temperature'], 1)} °C, {now['condition']}, "
+                     f"humidity {_num(now['relative_humidity'])}%, wind {_num(now['wind_speed'])} {wind_unit}.")
+    for d in days:
+        lines.append(f"{_first_upper(name(d))}: {_num(d['temperature_min'])}–{_num(d['temperature_max'])} °C · rain "
+                     f"{_num(d['precipitation_probability_max'])}% ({_num(d['precipitation_sum'], 1)} mm) · "
+                     f"{d['condition']}" + (f" · wind {_num(d['wind_speed_max'])} {wind_unit}" if focus == "wind" else ""))
+    # Weather models forecast grid cells several km across: say which cell answered, and how far away.
+    asked = (step.params["latitude"], step.params["longitude"])
+    lines.append(f"Forecast for {_coordinate(*asked)} (marked on the map); the provider answered from its nearest "
+                 f"model grid point, {_coordinate(o['latitude'], o['longitude'])}, about "
+                 f"{_km_between(asked, (o['latitude'], o['longitude'])):.1f} km away (elevation {_num(o['elevation_m'])} m). "
+                 f"Days are local to {o['timezone']}.")
+    retrieved = o["retrieved_at"][:16].replace("T", " ")
+    lines.append(f"Source: {o['attribution']}, {o['model'].split(' ')[0]} models; retrieved {retrieved} UTC"
+                 + (" (cached)." if o["cached"] else "."))
+    return "\n".join(lines), step.confidence, []

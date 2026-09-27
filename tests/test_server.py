@@ -416,6 +416,30 @@ def test_an_upload_without_a_declared_length_is_capped_while_streaming(small_lim
 BBOX = [72.90, 19.00, 73.00, 19.10]
 
 
+@pytest.fixture
+def scene_classification(monkeypatch):
+    """Fake only the scene-classification request (D-030): an SCL raster written on the retrieved
+    scene's own grid. `layout(height, width)` gives the classes; clear vegetation (4) by default."""
+    from types import SimpleNamespace
+
+    import rasterio
+
+    state = SimpleNamespace(layout=lambda height, width: np.full((height, width), 4, np.uint8), calls=[])
+
+    def retrieve_scene_classification(self, bbox, acquired_date, destination):
+        state.calls.append({"bbox": tuple(bbox), "date": acquired_date})
+        with rasterio.open(destination.parent / "scene.tif") as scene:
+            profile = {"driver": "GTiff", "width": scene.width, "height": scene.height, "count": 1,
+                       "dtype": "uint8", "crs": scene.crs, "transform": scene.transform}
+        with rasterio.open(destination, "w", **profile) as out:
+            out.write(state.layout(profile["height"], profile["width"])[None])
+        return destination
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve_scene_classification",
+                        retrieve_scene_classification)
+    return state
+
+
 def test_health_reports_imagery_availability_without_exposing_credentials(client, monkeypatch):
     monkeypatch.setenv("COPERNICUS_CLIENT_ID", "public-looking-id")
     monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "super-secret-value")
@@ -498,7 +522,8 @@ def test_a_retrieval_failure_never_falls_back_to_fake_imagery(client, monkeypatc
     assert response.json()["code"] == "no_imagery_found"
 
 
-def test_a_retrieved_scene_becomes_an_ordinary_upload_and_analyses(client, monkeypatch, tmp_path, write_tiff, scene):
+def test_a_retrieved_scene_becomes_an_ordinary_upload_and_analyses(client, monkeypatch, tmp_path, write_tiff, scene,
+        scene_classification):
     """The whole point of the acquisition layer: retrieval produces a normal upload id."""
     from satquery.providers import RetrievedScene, SceneMetadata
 
@@ -638,7 +663,8 @@ def test_a_temporal_question_retrieves_two_scenes_with_both_provenance_records(c
     assert fake_pair[0]["bbox"] == tuple(BBOX)
 
 
-def test_a_single_date_question_still_takes_the_single_scene_path(client, monkeypatch, write_tiff, scene):
+def test_a_single_date_question_still_takes_the_single_scene_path(client, monkeypatch, write_tiff, scene,
+        scene_classification):
     from satquery.providers import RetrievedScene
 
     monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
@@ -916,3 +942,297 @@ def test_no_sar_scene_is_a_structured_failure_never_an_optical_only_answer(clien
     monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.retrieve_optical_sar", no_sar)
     response = client.post("/api/fetch-imagery", json={"query": CROSS_MODAL_QUERY, "aoi_bbox": BBOX})
     assert response.status_code == 404 and response.json()["code"] == "no_sar_imagery"
+
+
+# ------------------------------------------------------------- weather (optional capability, D-029)
+
+WEATHER_AREA = {"type": "Polygon", "coordinates": [[[72.97, 19.05], [73.02, 19.05], [73.02, 19.10], [72.97, 19.10],
+                                                    [72.97, 19.05]]]}
+
+
+@pytest.fixture
+def weather_http(monkeypatch):
+    """Fake only the network, with the forecast shape Open-Meteo returns; no forecast cached across tests."""
+    from satquery import api
+    from satquery.specialists.weather import OpenMeteoWeather
+    from test_weather import FakeClient, FakeResponse, payload
+
+    fake = FakeClient(FakeResponse(200, payload()))
+    monkeypatch.setattr(OpenMeteoWeather, "_client", lambda self: fake)
+    monkeypatch.setattr(api, "_WEATHER", {})
+    return fake
+
+
+@pytest.mark.parametrize("query, route", [
+    ("Will it rain here this week?", "weather"),
+    ("Describe this area", "imagery"),
+    ("Compare optical and SAR evidence to find water.", "imagery"),
+    ("What is the weather and what changed here?", "mixed"),
+])
+def test_route_decides_from_the_wording_alone(client, weather_http, query, route):
+    body = client.post("/api/route", json={"query": query}).json()
+    assert body["route"] == route and body["rule"]
+    assert (body["message"] is not None) == (route == "mixed")
+    assert weather_http.calls == [], "routing retrieves nothing"
+
+
+def test_a_weather_question_gets_a_forecast_with_its_point_and_provenance(client, weather_http):
+    body = client.post("/api/weather", json={"query": "Will it rain here in the next 7 days?",
+                                             "aoi_geometry": WEATHER_AREA}).json()
+    response, weather = body["response"], body["weather"]
+    assert response["status"] == "ok" and response["task"] == "weather_forecast"
+    assert response["trace"]["input_config"] == "area_only" and response["trace"]["images"] == []
+    assert body["overlay_layers"] == [] and body["upload_ids"] == []
+    assert weather["point_wgs84"] == pytest.approx([72.995, 19.075])  # the marker: inside the drawn area
+    assert weather["grid_point_wgs84"] == [73.0306, 19.086115] and weather["timezone"] == "Asia/Kolkata"
+    assert weather["period"] == ["2026-09-27", "2026-10-03"] and weather["area_source"] == "drawn area"
+    assert weather["attribution"] == "Weather data by Open-Meteo.com (CC BY 4.0)"
+    assert client.get(response["report_html"]).status_code == 200
+
+
+def test_the_image_footprint_can_stand_in_for_a_drawn_area(client, weather_http):
+    body = client.post("/api/weather", json={"query": "Will it rain tomorrow?", "aoi_bbox": [72.97, 19.05, 73.02, 19.10],
+                                             "area_source": "image footprint"}).json()
+    assert body["response"]["status"] == "ok" and body["weather"]["area_source"] == "image footprint"
+    assert "image footprint" in body["response"]["answer"]
+
+
+def test_weather_refusals_come_back_as_explainable_results(client, weather_http):
+    no_area = client.post("/api/weather", json={"query": "Will it rain tomorrow?"}).json()["response"]
+    assert no_area["status"] == "invalid_input" and no_area["trace"]["validation"][0]["code"] == "area_missing"
+    far = client.post("/api/weather", json={"query": "When will monsoon come?", "aoi_geometry": WEATHER_AREA}).json()
+    assert far["response"]["trace"]["validation"][0]["code"] == "forecast_horizon_unsupported"
+    assert weather_http.calls == []
+    bad = client.post("/api/weather", json={"query": "Rain tomorrow?", "aoi_bbox": [73.02, 19.05, 72.97, 19.10]})
+    assert bad.status_code == 422 and bad.json()["code"] == "area_invalid"
+
+
+def test_a_switched_off_weather_provider_is_a_503(client, weather_http, monkeypatch):
+    monkeypatch.setenv("SATQUERY_WEATHER", "off")
+    response = client.post("/api/weather", json={"query": "Rain tomorrow?", "aoi_geometry": WEATHER_AREA})
+    assert response.status_code == 503 and response.json()["code"] == "weather_not_configured"
+    assert client.get("/api/health").json()["weather_available"] is False
+
+
+@pytest.mark.parametrize("query, code", [
+    ("Will it rain here this week?", "weather_question"),
+    ("What is the weather and what changed here?", "mixed_question"),
+])
+def test_a_weather_question_never_retrieves_imagery(client, monkeypatch, query, code):
+    """Even from a client that skipped /api/route, and before any provider or credential is touched."""
+    def never(*args, **kwargs):  # pragma: no cover - the guard must stop the request first
+        raise AssertionError("Copernicus provider constructed for a weather question")
+
+    monkeypatch.setattr("satquery.providers.copernicus.CopernicusSentinelProvider.__init__", never)
+    response = client.post("/api/fetch-imagery", json={"query": query, "aoi_bbox": BBOX})
+    assert response.status_code == 422 and response.json()["code"] == code
+
+
+def test_health_reports_weather_without_any_credential(client, monkeypatch):
+    monkeypatch.setenv("OPEN_METEO_API_KEY", "sk-weather-secret")
+    response = client.get("/api/health")
+    body = response.json()
+    assert body["weather_provider"] == "Open-Meteo" and body["weather_available"] is True
+    assert "sk-weather-secret" not in response.text
+
+
+# ------------------------------------------------------------- water: optical first, radar fallback (D-030)
+
+WATER_QUESTION = "Highlight the water body in this image."
+
+
+@pytest.fixture
+def water_retrieval(monkeypatch, write_tiff, optical_scene):
+    """Fake only the network. The optical scene (64 x 64, water top-left) is written as Sentinel-2 would
+    deliver it; Sentinel-1 is written on the scene's own grid, as the Process API renders it."""
+    from types import SimpleNamespace
+
+    import rasterio
+
+    from satquery.providers import RetrievedScene, SceneMetadata
+
+    monkeypatch.setenv("COPERNICUS_CLIENT_ID", "id")
+    monkeypatch.setenv("COPERNICUS_CLIENT_SECRET", "secret")
+    state = SimpleNamespace(source=write_tiff("s2.tif", optical_scene, ["blue", "green", "red", "nir"]),
+                            tile_cloud=3.0, optical=[], near=[], latest=[], near_error=None)
+
+    def sar_raster(destination, grid_from):
+        with rasterio.open(grid_from) as grid:
+            profile = {"driver": "GTiff", "width": grid.width, "height": grid.height, "count": 2,
+                       "dtype": "float32", "crs": grid.crs, "transform": grid.transform}
+        co = np.full((profile["height"], profile["width"]), 0.15, np.float32)  # linear power, land
+        co[:20, :20] = 0.005  # dark, specular water, where the optical scene has its water
+        with rasterio.open(destination, "w", **profile) as out:
+            out.write(np.stack([co, co / 5]))
+            out.set_band_description(1, "VV")
+            out.set_band_description(2, "VH")
+
+    def sar_meta(bbox, acquired, scene_id):
+        return SceneMetadata(provider="Copernicus Data Space Ecosystem", collection="sentinel-1-grd",
+                             satellite="Sentinel-1D", product_level="GRD", acquired=acquired,
+                             acquired_datetime=f"{acquired}T11:40:00Z", cloud_cover=None, bbox_wgs84=tuple(bbox),
+                             crs="EPSG:4326", resolution_m=10.0, bands=["VV (co-pol)", "VH (cross-pol)"],
+                             width=64, height=64, scene_id=scene_id, modality="sar")
+
+    def retrieve(self, bbox, bands, destination, **kwargs):
+        state.optical.append(tuple(bbox))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(Path(state.source).read_bytes())
+        return RetrievedScene(path=destination,
+                              metadata=_scene_metadata("2026-09-19", state.tile_cloud, "S2C_T46REN", bbox))
+
+    def retrieve_sar_near(self, bbox, optical_date, destination):
+        state.near.append({"bbox": tuple(bbox), "optical_date": optical_date})
+        if state.near_error:
+            raise state.near_error
+        sar_raster(destination, destination.parent / "scene.tif")
+        return RetrievedScene(path=destination, metadata=sar_meta(bbox, "2026-09-13", "S1D_0913"))
+
+    def retrieve_sar(self, bbox, destination, **kwargs):
+        state.latest.append(tuple(bbox))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        sar_raster(destination, state.source)
+        return RetrievedScene(path=destination, metadata=sar_meta(bbox, "2026-09-25", "S1D_0925"))
+
+    provider = "satquery.providers.copernicus.CopernicusSentinelProvider"
+    monkeypatch.setattr(f"{provider}.retrieve", retrieve)
+    monkeypatch.setattr(f"{provider}.retrieve_sar_near", retrieve_sar_near)
+    monkeypatch.setattr(f"{provider}.retrieve_sar", retrieve_sar)
+    return state
+
+
+def _cloud(fraction):
+    """A scene classification whose bottom `fraction` of rows is high-probability cloud (9), away from
+    the top-left water; the rest is vegetation (4)."""
+    def layout(height, width):
+        classes = np.full((height, width), 4, np.uint8)
+        classes[height - round(fraction * height):, :] = 9
+        return classes
+    return layout
+
+
+def _fetch(client, query=WATER_QUESTION):
+    return client.post("/api/fetch-imagery", json={"query": query, "aoi_bbox": BBOX})
+
+
+def _analyse(client, fetched, query=WATER_QUESTION):
+    images = [{"upload_id": s["upload"]["id"], "modality": s["upload"]["modality"]} for s in fetched["images"]]
+    return client.post("/api/analyze", json={"query": query, "images": images}).json()["response"]
+
+
+def test_case1_a_clear_water_scene_is_answered_optically_without_sentinel1(client, water_retrieval,
+                                                                          scene_classification):
+    body = _fetch(client).json()
+    assert body["mode"] == "single" and [s["upload"]["modality"] for s in body["images"]] == ["optical"]
+    quality = body["optical_quality"]
+    assert quality["usable"] and quality["affected_fraction"] == 0 and not quality["masked"]
+    assert water_retrieval.near == [] and water_retrieval.latest == [], "no Sentinel-1 retrieval"
+    response = _analyse(client, body)
+    assert [s["tool"] for s in response["trace"]["steps"]] == ["optical.spectral_indices", "vlm.segment"]
+    assert response["answer"].startswith("Highlighted water: 9.8% of the analysed area by NDWI > 0")
+
+
+def test_case2_a_cloudy_area_falls_back_to_sentinel1(client, water_retrieval, scene_classification):
+    from datetime import date
+
+    scene_classification.layout = _cloud(0.42)
+    body = _fetch(client).json()
+    assert body["mode"] == "sar_fallback"
+    assert [(s["role"], s["upload"]["modality"], s["metadata"]["satellite"]) for s in body["images"]] == [
+        ("sar", "sar", "Sentinel-1D")]
+    quality = body["optical_quality"]
+    assert not quality["usable"] and "42.2% of the selected area" in quality["reason"]
+    assert quality["scene"]["scene_id"] == "S2C_T46REN", "the optical scene that was assessed is named"
+    assert water_retrieval.near == [{"bbox": tuple(BBOX), "optical_date": date(2026, 9, 19)}]
+    response = _analyse(client, body)
+    assert response["trace"]["input_config"] == "single_sar"
+    assert "sar.water_mask" in [s["tool"] for s in response["trace"]["steps"]]
+    assert response["answer"].startswith("Highlighted water")
+
+
+def test_case3_low_tile_cloud_cover_does_not_hide_a_cloud_covered_area(client, water_retrieval,
+                                                                      scene_classification):
+    """Loktak Lake, 2026-09-19: the tile was listed at 16.61% cloud; the selected area was 42% obscured."""
+    water_retrieval.tile_cloud = 16.61
+    scene_classification.layout = _cloud(0.42)
+    body = _fetch(client).json()
+    assert body["optical_quality"]["scene"]["cloud_cover"] == 16.61 < 20
+    assert body["mode"] == "sar_fallback", "the verdict comes from the area, not the tile"
+
+
+def test_case4_too_few_clear_pixels_falls_back_even_below_20_percent(client, water_retrieval, scene_classification,
+                                                                    write_tiff, optical_scene):
+    water_retrieval.source = write_tiff("tiny.tif", optical_scene[:, :16, :16], ["blue", "green", "red", "nir"])
+    scene_classification.layout = _cloud(0.125)  # 2 of 16 rows: 224 clear pixels of 256
+    body = _fetch(client).json()
+    quality = body["optical_quality"]
+    assert quality["affected_fraction"] < 0.20 and quality["clear_pixels"] == 224
+    assert body["mode"] == "sar_fallback" and "only 224 clear optical pixels" in quality["reason"]
+
+
+def test_case5_an_explicit_radar_question_goes_straight_to_sentinel1(client, water_retrieval, scene_classification):
+    body = _fetch(client, "Use radar to find the water.").json()
+    assert body["mode"] == "sar" and body["optical_quality"] is None
+    assert water_retrieval.latest == [tuple(BBOX)]
+    assert water_retrieval.optical == [] and scene_classification.calls == [], "no optical scene involved"
+    response = _analyse(client, body, "Use radar to find the water.")
+    assert response["trace"]["input_config"] == "single_sar" and response["task"] == "grounding"
+    assert "sar.water_mask" in [s["tool"] for s in response["trace"]["steps"]]
+
+
+def test_case6_an_explicit_optical_and_sar_question_keeps_the_cross_modal_path(client, fake_optical_sar,
+                                                                              scene_classification):
+    body = _fetch(client, "Use the optical and SAR images together to find the water.").json()
+    assert body["mode"] == "cross_modal" and body["optical_quality"] is None
+    assert scene_classification.calls == [] and len(fake_optical_sar) == 1
+
+
+def test_case7_a_clear_scene_without_water_does_not_fetch_radar(client, water_retrieval, scene_classification,
+                                                               write_tiff, optical_scene):
+    dry = optical_scene.copy()
+    dry[:, :20, :20] = dry[:, 30:50, 30:50]
+    water_retrieval.source = write_tiff("dry.tif", dry, ["blue", "green", "red", "nir"])
+    body = _fetch(client).json()
+    assert body["mode"] == "single" and water_retrieval.near == [], "no water found is not a reason for radar"
+    assert _analyse(client, body)["answer"].startswith("No water was found in this image by NDWI > 0")
+
+
+def test_a_question_that_is_not_about_water_is_retrieved_as_before(client, water_retrieval, scene_classification):
+    body = _fetch(client, "Describe this area").json()
+    assert body["mode"] == "single" and body["optical_quality"] is None
+    assert scene_classification.calls == [] and water_retrieval.near == []
+
+
+def test_a_partly_cloudy_usable_scene_is_analysed_on_its_clear_pixels(client, water_retrieval,
+                                                                     scene_classification):
+    scene_classification.layout = _cloud(0.125)  # 8 of 64 rows
+    body = _fetch(client).json()
+    assert body["mode"] == "single" and body["optical_quality"]["masked"] is True
+    assert body["upload"]["name"].endswith("(cloud-masked)") and water_retrieval.near == []
+    answer = _analyse(client, body)["answer"]
+    assert "Highlighted water: 11.2%" in answer, "400 water pixels of the 3,584 clear ones"
+    assert "12.5% of the image had no usable data" in answer
+
+
+def test_a_repeated_fallback_is_served_from_the_cache(client, water_retrieval, scene_classification):
+    scene_classification.layout = _cloud(0.42)
+    first, second = _fetch(client).json(), _fetch(client).json()
+    assert len(scene_classification.calls) == 1 and len(water_retrieval.near) == 1
+    assert (first["cached"], second["cached"]) == (False, True) and second["mode"] == "sar_fallback"
+
+
+def test_no_radar_scene_after_an_unusable_optical_one_is_reported_not_papered_over(client, water_retrieval,
+                                                                                  scene_classification):
+    from satquery.providers.errors import NoSarImagery
+
+    scene_classification.layout = _cloud(0.42)
+    water_retrieval.near_error = NoSarImagery("No Sentinel-1 dual-polarisation (VV+VH) scene of this area was found.")
+    response = _fetch(client)
+    assert response.status_code == 404 and response.json()["code"] == "no_sar_imagery"
+    assert "cannot be used here: 42.2% of the selected area" in response.json()["message"]
+
+
+def test_a_radar_question_about_change_over_time_is_refused(client, water_retrieval, scene_classification):
+    response = _fetch(client, "Has the water shrunk over time? Use radar.")
+    assert response.status_code == 422 and response.json()["code"] == "sar_temporal_unsupported"
+    assert water_retrieval.optical == water_retrieval.latest == []

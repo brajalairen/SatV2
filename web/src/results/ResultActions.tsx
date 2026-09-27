@@ -21,7 +21,9 @@ export function ResultActions({ view, onViewChange }: { view: ResultView; onView
   // A change task has already run the bi-temporal comparison, so its numbers are there to show.
   const temporalAvailable = response.task === "change_analysis" && temporal.ready;
   const placed = result.overlay_layers[0];
-  const footprint = response.trace.images.find((image) => image.bounds_wgs84)?.bounds_wgs84;
+  // A weather answer has no image: its footprint is the area the forecast point stands for.
+  const footprint =
+    response.trace.images.find((image) => image.bounds_wgs84)?.bounds_wgs84 ?? result.weather?.area_bbox_wgs84;
 
   return (
     <footer className="shrink-0 border-t border-line px-2 py-2">
